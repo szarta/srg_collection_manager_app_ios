@@ -1198,10 +1198,464 @@ struct FiltersMenu: View {
 
 // MARK: - Placeholder Views
 
+// MARK: - Decks Tab
+
 struct DecksView: View {
+    @EnvironmentObject var viewModel: DeckViewModel
+
     var body: some View {
-        Text("Decks")
-            .navigationTitle("Decks")
+        DeckFoldersView()
+            .task {
+                await viewModel.loadDeckFolders()
+            }
+    }
+}
+
+// MARK: - Deck Folders View
+
+struct DeckFoldersView: View {
+    @EnvironmentObject var viewModel: DeckViewModel
+    @State private var showAddFolder = false
+    @State private var newFolderName = ""
+
+    var defaultFolders: [DeckFolder] {
+        viewModel.deckFolders.filter { $0.isDefault }
+    }
+
+    var customFolders: [DeckFolder] {
+        viewModel.deckFolders.filter { !$0.isDefault }
+    }
+
+    var body: some View {
+        List {
+            // Default Folders
+            if !defaultFolders.isEmpty {
+                Section("Default Folders") {
+                    ForEach(defaultFolders) { folder in
+                        NavigationLink(value: folder) {
+                            DeckFolderRow(folder: folder)
+                        }
+                    }
+                }
+            }
+
+            // Custom Folders
+            if !customFolders.isEmpty {
+                Section("My Folders") {
+                    ForEach(customFolders) { folder in
+                        NavigationLink(value: folder) {
+                            DeckFolderRow(folder: folder)
+                        }
+                    }
+                    .onDelete { indexSet in
+                        for index in indexSet {
+                            let folder = customFolders[index]
+                            Task {
+                                await viewModel.deleteDeckFolder(folder)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Decks")
+        .navigationDestination(for: DeckFolder.self) { folder in
+            DeckListView(folder: folder)
+        }
+        .navigationDestination(for: Deck.self) { deck in
+            DeckEditorView(deck: deck)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showAddFolder = true
+                }) {
+                    Image(systemName: "folder.badge.plus")
+                }
+            }
+        }
+        .sheet(isPresented: $showAddFolder) {
+            NavigationStack {
+                Form {
+                    TextField("Folder Name", text: $newFolderName)
+                }
+                .navigationTitle("New Deck Folder")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            showAddFolder = false
+                            newFolderName = ""
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Create") {
+                            Task {
+                                await viewModel.createDeckFolder(name: newFolderName)
+                                showAddFolder = false
+                                newFolderName = ""
+                            }
+                        }
+                        .disabled(newFolderName.isEmpty)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DeckFolderRow: View {
+    let folder: DeckFolder
+
+    var body: some View {
+        HStack {
+            Image(systemName: folder.isDefault ? "folder" : "folder.fill")
+                .foregroundColor(.blue)
+            Text(folder.name)
+        }
+    }
+}
+
+// MARK: - Deck List View
+
+struct DeckListView: View {
+    let folder: DeckFolder
+    @EnvironmentObject var viewModel: DeckViewModel
+    @State private var showAddDeck = false
+    @State private var newDeckName = ""
+    @State private var selectedSpectacleType: SpectacleType = .valiant
+
+    var body: some View {
+        Group {
+            if viewModel.decks.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "square.stack.3d.up.slash")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No Decks")
+                        .font(.headline)
+                    Text("Tap + to create a deck")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(viewModel.decks) { deckWithCount in
+                        NavigationLink(value: deckWithCount.deck) {
+                            DeckRowView(deck: deckWithCount.deck, cardCount: deckWithCount.cardCount)
+                        }
+                    }
+                    .onDelete { indexSet in
+                        for index in indexSet {
+                            let deck = viewModel.decks[index].deck
+                            Task {
+                                await viewModel.deleteDeck(deck)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(folder.name)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showAddDeck = true
+                }) {
+                    Image(systemName: "plus")
+                }
+            }
+        }
+        .task {
+            await viewModel.loadDecks(in: folder.id)
+        }
+        .sheet(isPresented: $showAddDeck) {
+            NavigationStack {
+                Form {
+                    TextField("Deck Name", text: $newDeckName)
+
+                    Picker("Spectacle Type", selection: $selectedSpectacleType) {
+                        Text("Valiant").tag(SpectacleType.valiant)
+                        Text("Newman").tag(SpectacleType.newman)
+                    }
+                }
+                .navigationTitle("New Deck")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            showAddDeck = false
+                            newDeckName = ""
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Create") {
+                            Task {
+                                await viewModel.createDeck(
+                                    in: folder.id,
+                                    name: newDeckName,
+                                    spectacleType: selectedSpectacleType
+                                )
+                                showAddDeck = false
+                                newDeckName = ""
+                            }
+                        }
+                        .disabled(newDeckName.isEmpty)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DeckRowView: View {
+    let deck: Deck
+    let cardCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(deck.name)
+                .font(.headline)
+            HStack {
+                Text(deck.spectacleType.rawValue.capitalized)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(cardCount) cards")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
+// MARK: - Deck Editor View
+
+struct DeckEditorView: View {
+    let deck: Deck
+    @EnvironmentObject var viewModel: DeckViewModel
+    @State private var showingCardPicker = false
+    @State private var selectedSlotType: DeckSlotType = .deck
+    @State private var selectedSlotNumber: Int = 1
+
+    var body: some View {
+        List {
+            // Entrance
+            Section("Entrance") {
+                if let entrance = viewModel.entrance {
+                    CardRow(card: entrance)
+                } else {
+                    Button(action: {
+                        selectedSlotType = .entrance
+                        showingCardPicker = true
+                    }) {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                            Text("Set Entrance")
+                        }
+                    }
+                }
+            }
+
+            // Competitor
+            Section("Competitor") {
+                if let competitor = viewModel.competitor {
+                    CardRow(card: competitor)
+                } else {
+                    Button(action: {
+                        selectedSlotType = .competitor
+                        showingCardPicker = true
+                    }) {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                            Text("Set Competitor")
+                        }
+                    }
+                }
+            }
+
+            // Main Deck (30 cards)
+            Section("Main Deck (\(viewModel.mainDeckCards.count)/30)") {
+                ForEach(1...30, id: \.self) { slotNum in
+                    if let cardDetails = viewModel.mainDeckCards.first(where: { $0.slotNumber == slotNum }) {
+                        HStack {
+                            Text("\(slotNum).")
+                                .foregroundColor(.secondary)
+                                .frame(width: 30, alignment: .leading)
+                            CardRow(card: cardDetails.card)
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                Task {
+                                    await viewModel.removeCard(from: deck.id, slotType: .deck, slotNumber: slotNum)
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    } else {
+                        Button(action: {
+                            selectedSlotType = .deck
+                            selectedSlotNumber = slotNum
+                            showingCardPicker = true
+                        }) {
+                            HStack {
+                                Text("\(slotNum).")
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 30, alignment: .leading)
+                                Text("Empty Slot")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Finishes
+            Section("Finishes (\(viewModel.finishCards.count))") {
+                ForEach(viewModel.finishCards) { cardDetails in
+                    CardRow(card: cardDetails.card)
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                Task {
+                                    await viewModel.removeCard(from: deck.id, slotType: .finish, slotNumber: cardDetails.slotNumber)
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                }
+                Button(action: {
+                    selectedSlotType = .finish
+                    showingCardPicker = true
+                }) {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                        Text("Add Finish")
+                    }
+                }
+            }
+
+            // Alternates
+            Section("Alternates (\(viewModel.alternateCards.count))") {
+                ForEach(viewModel.alternateCards) { cardDetails in
+                    CardRow(card: cardDetails.card)
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                Task {
+                                    await viewModel.removeCard(from: deck.id, slotType: .alternate, slotNumber: cardDetails.slotNumber)
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                }
+                Button(action: {
+                    selectedSlotType = .alternate
+                    showingCardPicker = true
+                }) {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                        Text("Add Alternate")
+                    }
+                }
+            }
+        }
+        .navigationTitle(deck.name)
+        .task {
+            await viewModel.loadDeckCards(deck.id)
+        }
+        .sheet(isPresented: $showingCardPicker) {
+            AddCardToDeckSheet(
+                deckId: deck.id,
+                slotType: selectedSlotType,
+                slotNumber: selectedSlotNumber
+            )
+        }
+    }
+}
+
+// MARK: - Add Card to Deck Sheet
+
+struct AddCardToDeckSheet: View {
+    let deckId: String
+    let slotType: DeckSlotType
+    let slotNumber: Int
+
+    @EnvironmentObject var viewModel: DeckViewModel
+    @Environment(\.dismiss) var dismiss
+
+    @State private var searchQuery = ""
+    @State private var searchResults: [Card] = []
+    @State private var isSearching = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if searchResults.isEmpty && !searchQuery.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
+                        Text("No cards found")
+                            .font(.headline)
+                    }
+                } else {
+                    List(searchResults) { card in
+                        Button(action: {
+                            Task {
+                                switch slotType {
+                                case .entrance:
+                                    await viewModel.setEntrance(card, in: deckId)
+                                case .competitor:
+                                    await viewModel.setCompetitor(card, in: deckId)
+                                case .deck:
+                                    await viewModel.setDeckCard(card, in: deckId, slotNumber: slotNumber)
+                                case .finish:
+                                    await viewModel.addFinish(card, to: deckId)
+                                case .alternate:
+                                    await viewModel.addAlternate(card, to: deckId)
+                                }
+                                dismiss()
+                            }
+                        }) {
+                            CardRow(card: card)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add Card")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchQuery, prompt: "Search cards...")
+            .onChange(of: searchQuery) { newValue in
+                Task {
+                    await performSearch(newValue)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func performSearch(_ query: String) async {
+        guard !query.isEmpty else {
+            searchResults = []
+            return
+        }
+
+        isSearching = true
+        do {
+            searchResults = try await viewModel.databaseService.searchCards(query: query, limit: 50)
+        } catch {
+            searchResults = []
+        }
+        isSearching = false
     }
 }
 

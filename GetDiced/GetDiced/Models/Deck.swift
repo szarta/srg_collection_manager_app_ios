@@ -20,7 +20,7 @@ enum DeckSlotType: String, Codable {
 // MARK: - Deck Model
 
 /// A deck within a deck folder
-struct Deck: Identifiable, Codable {
+struct Deck: Identifiable, Codable, Hashable {
     let id: String
     let folderId: String
     let name: String

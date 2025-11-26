@@ -20,6 +20,7 @@ struct GetDicedApp: App {
     @StateObject private var collectionViewModel: CollectionViewModel
     @StateObject private var syncViewModel: SyncViewModel
     @StateObject private var cardSearchViewModel: CardSearchViewModel
+    @StateObject private var deckViewModel: DeckViewModel
 
     // MARK: - Initialization
 
@@ -35,6 +36,7 @@ struct GetDicedApp: App {
         _collectionViewModel = StateObject(wrappedValue: CollectionViewModel(databaseService: dbService))
         _syncViewModel = StateObject(wrappedValue: SyncViewModel(databaseService: dbService, apiClient: api))
         _cardSearchViewModel = StateObject(wrappedValue: CardSearchViewModel(databaseService: dbService))
+        _deckViewModel = StateObject(wrappedValue: DeckViewModel(databaseService: dbService))
     }
 
     var body: some Scene {
@@ -43,12 +45,14 @@ struct GetDicedApp: App {
                 .environmentObject(collectionViewModel)
                 .environmentObject(syncViewModel)
                 .environmentObject(cardSearchViewModel)
+                .environmentObject(deckViewModel)
                 .task {
                     // Print Documents directory for debugging
                     print("📂 Documents directory: \(ImageHelper.documentsPath())")
 
                     // Ensure default folders exist on first launch
                     try? await databaseService.ensureDefaultFolders()
+                    try? await databaseService.ensureDefaultDeckFolders()
                 }
         }
     }

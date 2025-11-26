@@ -53,10 +53,28 @@ class DatabaseService {
     private let fc_quantity = Expression<Int>("quantity")
     private let fc_addedAt = Expression<Int64>("added_at")
 
-    // Decks tables
+    // Deck Folders table
     private let deckFolders = Table("deck_folders")
+    private let df_id = Expression<String>("id")
+    private let df_name = Expression<String>("name")
+    private let df_isDefault = Expression<Bool>("is_default")
+    private let df_displayOrder = Expression<Int>("display_order")
+
+    // Decks table
     private let decks = Table("decks")
+    private let deck_id = Expression<String>("id")
+    private let deck_folderId = Expression<String>("folder_id")
+    private let deck_name = Expression<String>("name")
+    private let deck_spectacleType = Expression<String>("spectacle_type")
+    private let deck_createdAt = Expression<Int64>("created_at")
+    private let deck_modifiedAt = Expression<Int64>("modified_at")
+
+    // Deck Cards table
     private let deckCards = Table("deck_cards")
+    private let dc_deckId = Expression<String>("deck_id")
+    private let dc_cardUuid = Expression<String>("card_uuid")
+    private let dc_slotType = Expression<String>("slot_type")
+    private let dc_slotNumber = Expression<Int>("slot_number")
 
     // MARK: - Initialization
 
@@ -409,17 +427,286 @@ class DatabaseService {
         try db.run(row.delete())
     }
 
-    // MARK: - Deck Queries (TODO: Implement similar to above)
+    // MARK: - Deck Folder Queries
 
-    // TODO: Implement deck-related queries when building deck features
-    // - getAllDeckFolders()
-    // - getDecks(inFolder:)
-    // - getDeck(byId:)
-    // - saveDeck(_:)
-    // - deleteDeck(byId:)
-    // - getCardsInDeck(deckId:)
-    // - addCardToDeck(cardUuid:deckId:slotType:slotNumber:)
-    // - removeCardFromDeck(deckId:slotType:slotNumber:)
+    /// Get all deck folders
+    func getAllDeckFolders() async throws -> [DeckFolder] {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        var results: [DeckFolder] = []
+        for row in try db.prepare(deckFolders.order(df_displayOrder)) {
+            results.append(parseDeckFolder(from: row))
+        }
+        return results
+    }
+
+    /// Get deck folder by ID
+    func getDeckFolder(byId id: String) async throws -> DeckFolder? {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let query = deckFolders.filter(df_id == id)
+        guard let row = try db.pluck(query) else { return nil }
+        return parseDeckFolder(from: row)
+    }
+
+    /// Save deck folder
+    func saveDeckFolder(_ folder: DeckFolder) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        try db.run(deckFolders.insert(or: .replace,
+            df_id <- folder.id,
+            df_name <- folder.name,
+            df_isDefault <- folder.isDefault,
+            df_displayOrder <- folder.displayOrder
+        ))
+    }
+
+    /// Delete deck folder
+    func deleteDeckFolder(byId id: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        // Check if it's a default folder
+        if let folder = try await getDeckFolder(byId: id), folder.isDefault {
+            throw DatabaseError.cannotDeleteDefaultFolder
+        }
+
+        let row = deckFolders.filter(df_id == id)
+        try db.run(row.delete())
+    }
+
+    /// Ensure default deck folders exist
+    func ensureDefaultDeckFolders() async throws {
+        let defaultFolders = [
+            ("singles", "Singles", 0),
+            ("tornado", "Tornado", 1),
+            ("trios", "Trios", 2),
+            ("tag", "Tag", 3)
+        ]
+
+        for (id, name, order) in defaultFolders {
+            let existing = try await getDeckFolder(byId: id)
+            if existing == nil {
+                let folder = DeckFolder(
+                    id: id,
+                    name: name,
+                    isDefault: true,
+                    displayOrder: order
+                )
+                try await saveDeckFolder(folder)
+                print("✅ Created default deck folder: \(name)")
+            }
+        }
+    }
+
+    // MARK: - Deck Queries
+
+    /// Get all decks in a folder
+    func getDecksInFolder(_ folderId: String) async throws -> [Deck] {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let query = decks.filter(deck_folderId == folderId).order(deck_modifiedAt.desc)
+        var results: [Deck] = []
+        for row in try db.prepare(query) {
+            results.append(parseDeck(from: row))
+        }
+        return results
+    }
+
+    /// Get decks with card count
+    func getDecksWithCardCount(_ folderId: String) async throws -> [DeckWithCardCount] {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let allDecks = try await getDecksInFolder(folderId)
+        var results: [DeckWithCardCount] = []
+
+        for deck in allDecks {
+            let count = try await getCardCountInDeck(deck.id)
+            results.append(DeckWithCardCount(deck: deck, cardCount: count))
+        }
+
+        return results
+    }
+
+    /// Get deck by ID
+    func getDeck(byId id: String) async throws -> Deck? {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let query = decks.filter(deck_id == id)
+        guard let row = try db.pluck(query) else { return nil }
+        return parseDeck(from: row)
+    }
+
+    /// Save deck
+    func saveDeck(_ deck: Deck) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        try db.run(decks.insert(or: .replace,
+            deck_id <- deck.id,
+            deck_folderId <- deck.folderId,
+            deck_name <- deck.name,
+            deck_spectacleType <- deck.spectacleType.rawValue,
+            deck_createdAt <- deck.createdAt,
+            deck_modifiedAt <- deck.modifiedAt
+        ))
+    }
+
+    /// Update deck modified time
+    func updateDeckModifiedTime(_ deckId: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let row = decks.filter(deck_id == deckId)
+        try db.run(row.update(deck_modifiedAt <- now))
+    }
+
+    /// Delete deck
+    func deleteDeck(byId id: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        // Delete all cards in deck first
+        try await clearDeck(id)
+
+        // Then delete the deck
+        let row = decks.filter(deck_id == id)
+        try db.run(row.delete())
+    }
+
+    // MARK: - Deck Card Queries
+
+    /// Get cards in deck with details
+    func getCardsInDeck(_ deckId: String) async throws -> [DeckCardWithDetails] {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let query = deckCards
+            .join(cards, on: dc_cardUuid == card_dbUuid)
+            .filter(dc_deckId == deckId)
+            .order(dc_slotType, dc_slotNumber)
+
+        var results: [DeckCardWithDetails] = []
+        for row in try db.prepare(query) {
+            let card = try parseCard(from: row)
+            let slotTypeString = row[dc_slotType]
+            let slotType = DeckSlotType(rawValue: slotTypeString) ?? .deck
+            let slotNumber = row[dc_slotNumber]
+
+            results.append(DeckCardWithDetails(
+                card: card,
+                slotType: slotType,
+                slotNumber: slotNumber
+            ))
+        }
+        return results
+    }
+
+    /// Get card count in deck
+    func getCardCountInDeck(_ deckId: String) async throws -> Int {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let query = deckCards.filter(dc_deckId == deckId)
+        return try db.scalar(query.count)
+    }
+
+    /// Set entrance card
+    func setEntrance(deckId: String, cardUuid: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        try db.run(deckCards.insert(or: .replace,
+            dc_deckId <- deckId,
+            dc_cardUuid <- cardUuid,
+            dc_slotType <- DeckSlotType.entrance.rawValue,
+            dc_slotNumber <- 0
+        ))
+        try await updateDeckModifiedTime(deckId)
+    }
+
+    /// Set competitor card
+    func setCompetitor(deckId: String, cardUuid: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        try db.run(deckCards.insert(or: .replace,
+            dc_deckId <- deckId,
+            dc_cardUuid <- cardUuid,
+            dc_slotType <- DeckSlotType.competitor.rawValue,
+            dc_slotNumber <- 0
+        ))
+        try await updateDeckModifiedTime(deckId)
+    }
+
+    /// Set deck card at slot number (1-30)
+    func setDeckCard(deckId: String, cardUuid: String, slotNumber: Int) async throws {
+        guard slotNumber >= 1 && slotNumber <= 30 else {
+            throw DatabaseError.invalidSlotNumber
+        }
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        try db.run(deckCards.insert(or: .replace,
+            dc_deckId <- deckId,
+            dc_cardUuid <- cardUuid,
+            dc_slotType <- DeckSlotType.deck.rawValue,
+            dc_slotNumber <- slotNumber
+        ))
+        try await updateDeckModifiedTime(deckId)
+    }
+
+    /// Add finish card
+    func addFinish(deckId: String, cardUuid: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        // Find max slot number for finishes
+        let query = deckCards
+            .filter(dc_deckId == deckId && dc_slotType == DeckSlotType.finish.rawValue)
+
+        let maxSlot = try db.scalar(query.select(dc_slotNumber.max)) ?? 0
+
+        try db.run(deckCards.insert(
+            dc_deckId <- deckId,
+            dc_cardUuid <- cardUuid,
+            dc_slotType <- DeckSlotType.finish.rawValue,
+            dc_slotNumber <- maxSlot + 1
+        ))
+        try await updateDeckModifiedTime(deckId)
+    }
+
+    /// Add alternate card
+    func addAlternate(deckId: String, cardUuid: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        // Find max slot number for alternates
+        let query = deckCards
+            .filter(dc_deckId == deckId && dc_slotType == DeckSlotType.alternate.rawValue)
+
+        let maxSlot = try db.scalar(query.select(dc_slotNumber.max)) ?? 0
+
+        try db.run(deckCards.insert(
+            dc_deckId <- deckId,
+            dc_cardUuid <- cardUuid,
+            dc_slotType <- DeckSlotType.alternate.rawValue,
+            dc_slotNumber <- maxSlot + 1
+        ))
+        try await updateDeckModifiedTime(deckId)
+    }
+
+    /// Remove card from deck
+    func removeCardFromDeck(deckId: String, slotType: DeckSlotType, slotNumber: Int) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let row = deckCards.filter(
+            dc_deckId == deckId &&
+            dc_slotType == slotType.rawValue &&
+            dc_slotNumber == slotNumber
+        )
+        try db.run(row.delete())
+        try await updateDeckModifiedTime(deckId)
+    }
+
+    /// Clear all cards from deck
+    func clearDeck(_ deckId: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let row = deckCards.filter(dc_deckId == deckId)
+        try db.run(row.delete())
+        try await updateDeckModifiedTime(deckId)
+    }
 
     // MARK: - Batch Operations
 
@@ -542,6 +829,31 @@ class DatabaseService {
             createdAt: row[folder_createdAt]
         )
     }
+
+    /// Parse DeckFolder from SQLite row
+    private func parseDeckFolder(from row: Row) -> DeckFolder {
+        return DeckFolder(
+            id: row[df_id],
+            name: row[df_name],
+            isDefault: row[df_isDefault],
+            displayOrder: row[df_displayOrder]
+        )
+    }
+
+    /// Parse Deck from SQLite row
+    private func parseDeck(from row: Row) -> Deck {
+        let spectacleTypeString = row[deck_spectacleType]
+        let spectacleType = SpectacleType(rawValue: spectacleTypeString) ?? .valiant
+
+        return Deck(
+            id: row[deck_id],
+            folderId: row[deck_folderId],
+            name: row[deck_name],
+            spectacleType: spectacleType,
+            createdAt: row[deck_createdAt],
+            modifiedAt: row[deck_modifiedAt]
+        )
+    }
 }
 
 // MARK: - Database Errors
@@ -550,6 +862,8 @@ enum DatabaseError: Error, LocalizedError {
     case notConnected
     case bundleDatabaseNotFound
     case queryFailed(String)
+    case cannotDeleteDefaultFolder
+    case invalidSlotNumber
 
     var errorDescription: String? {
         switch self {
@@ -559,6 +873,10 @@ enum DatabaseError: Error, LocalizedError {
             return "Bundled database file not found in app resources"
         case .queryFailed(let message):
             return "Query failed: \(message)"
+        case .cannotDeleteDefaultFolder:
+            return "Cannot delete default folders"
+        case .invalidSlotNumber:
+            return "Invalid deck card slot number (must be 1-30)"
         }
     }
 }

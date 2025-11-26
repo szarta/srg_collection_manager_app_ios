@@ -3,7 +3,7 @@ import Foundation
 // MARK: - DeckFolder Model
 
 /// Folder for organizing decks by type (Singles, Tornado, Trios, Tag, custom)
-struct DeckFolder: Identifiable, Codable {
+struct DeckFolder: Identifiable, Codable, Hashable {
     let id: String
     let name: String
     let isDefault: Bool
