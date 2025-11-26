@@ -873,14 +873,330 @@ struct CardRow: View {
     }
 }
 
-// MARK: - Placeholder Views
+// MARK: - Card Search/Viewer Tab
 
 struct CardSearchView: View {
+    @EnvironmentObject var viewModel: CardSearchViewModel
+
     var body: some View {
-        Text("Viewer")
-            .navigationTitle("Card Viewer")
+        ScrollView {
+            VStack(spacing: 0) {
+                // Filter Chips
+                if viewModel.hasActiveFilters {
+                    ActiveFiltersBar(viewModel: viewModel)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                }
+
+                // Results count
+                HStack {
+                    Text("\(viewModel.cards.count) cards")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                // Card Grid
+                if viewModel.isLoading {
+                    ProgressView()
+                        .padding()
+                } else if let error = viewModel.errorMessage {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 48))
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .font(.subheadline)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
+                } else if viewModel.cards.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
+                        Text("No cards found")
+                            .font(.headline)
+                        Text("Try adjusting your filters")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                } else {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12)
+                        ],
+                        spacing: 12
+                    ) {
+                        ForEach(viewModel.cards) { card in
+                            NavigationLink(value: card) {
+                                CardGridItem(card: card)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom)
+                }
+            }
+        }
+        .navigationTitle("Card Viewer")
+        .navigationDestination(for: Card.self) { card in
+            CardDetailView(card: card)
+        }
+        .searchable(text: $viewModel.searchQuery, prompt: "Search cards...")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    FiltersMenu(viewModel: viewModel)
+                } label: {
+                    Label("Filters", systemImage: viewModel.hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                }
+            }
+        }
+        .task {
+            // Load filter options and initial cards
+            await viewModel.loadFilterOptions()
+            await viewModel.loadInitialCards()
+        }
     }
 }
+
+// MARK: - Card Grid Item
+
+struct CardGridItem: View {
+    let card: Card
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Card Image
+            if let imageURL = ImageHelper.imageURL(for: card.id) {
+                AsyncImage(url: imageURL) { phase in
+                    switch phase {
+                    case .empty:
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .aspectRatio(0.72, contentMode: .fit)
+                            .overlay {
+                                ProgressView()
+                            }
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .cornerRadius(8)
+                    case .failure:
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .aspectRatio(0.72, contentMode: .fit)
+                            .overlay {
+                                Image(systemName: "photo")
+                                    .foregroundColor(.gray)
+                            }
+                            .cornerRadius(8)
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .aspectRatio(0.72, contentMode: .fit)
+                    .overlay {
+                        Image(systemName: "photo")
+                            .foregroundColor(.gray)
+                    }
+                    .cornerRadius(8)
+            }
+
+            // Card Name
+            Text(card.name)
+                .font(.caption)
+                .fontWeight(.medium)
+                .lineLimit(2)
+                .foregroundColor(.primary)
+
+            // Card Type
+            Text(card.cardType)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Active Filters Bar
+
+struct ActiveFiltersBar: View {
+    @ObservedObject var viewModel: CardSearchViewModel
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                // Clear all button
+                Button(action: {
+                    viewModel.clearFilters()
+                }) {
+                    Label("Clear All", systemImage: "xmark.circle.fill")
+                        .font(.caption)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.red.opacity(0.1))
+                        .foregroundColor(.red)
+                        .cornerRadius(16)
+                }
+
+                // Active filter chips
+                if let cardType = viewModel.selectedCardType {
+                    FilterChip(label: cardType) {
+                        viewModel.selectedCardType = nil
+                    }
+                }
+
+                if let division = viewModel.selectedDivision {
+                    FilterChip(label: division) {
+                        viewModel.selectedDivision = nil
+                    }
+                }
+
+                if let atkType = viewModel.selectedAtkType {
+                    FilterChip(label: atkType) {
+                        viewModel.selectedAtkType = nil
+                    }
+                }
+
+                if let playOrder = viewModel.selectedPlayOrder {
+                    FilterChip(label: playOrder) {
+                        viewModel.selectedPlayOrder = nil
+                    }
+                }
+
+                if let releaseSet = viewModel.selectedReleaseSet {
+                    FilterChip(label: releaseSet) {
+                        viewModel.selectedReleaseSet = nil
+                    }
+                }
+
+                if viewModel.showBannedOnly {
+                    FilterChip(label: "Banned") {
+                        viewModel.showBannedOnly = false
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+struct FilterChip: View {
+    let label: String
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.caption)
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.blue.opacity(0.1))
+        .foregroundColor(.blue)
+        .cornerRadius(16)
+    }
+}
+
+// MARK: - Filters Menu
+
+struct FiltersMenu: View {
+    @ObservedObject var viewModel: CardSearchViewModel
+
+    var body: some View {
+        // Card Type
+        Menu("Card Type") {
+            Button("All Types") {
+                viewModel.selectedCardType = nil
+            }
+            ForEach(viewModel.availableCardTypes, id: \.self) { type in
+                Button(type) {
+                    viewModel.selectedCardType = type
+                }
+            }
+        }
+
+        // Division
+        Menu("Division") {
+            Button("All Divisions") {
+                viewModel.selectedDivision = nil
+            }
+            ForEach(viewModel.availableDivisions, id: \.self) { division in
+                Button(division) {
+                    viewModel.selectedDivision = division
+                }
+            }
+        }
+
+        // Attack Type
+        Menu("Attack Type") {
+            Button("All") {
+                viewModel.selectedAtkType = nil
+            }
+            Button("Strike") {
+                viewModel.selectedAtkType = "Strike"
+            }
+            Button("Grapple") {
+                viewModel.selectedAtkType = "Grapple"
+            }
+            Button("Submission") {
+                viewModel.selectedAtkType = "Submission"
+            }
+        }
+
+        // Play Order
+        Menu("Play Order") {
+            Button("All") {
+                viewModel.selectedPlayOrder = nil
+            }
+            Button("Before") {
+                viewModel.selectedPlayOrder = "Before"
+            }
+            Button("During") {
+                viewModel.selectedPlayOrder = "During"
+            }
+            Button("After") {
+                viewModel.selectedPlayOrder = "After"
+            }
+        }
+
+        Divider()
+
+        // Banned Toggle
+        Button(action: {
+            viewModel.showBannedOnly.toggle()
+        }) {
+            Label(
+                viewModel.showBannedOnly ? "Show All Cards" : "Show Banned Only",
+                systemImage: viewModel.showBannedOnly ? "checkmark" : ""
+            )
+        }
+
+        Divider()
+
+        // Clear All
+        Button("Clear All Filters", role: .destructive) {
+            viewModel.clearFilters()
+        }
+    }
+}
+
+// MARK: - Placeholder Views
 
 struct DecksView: View {
     var body: some View {

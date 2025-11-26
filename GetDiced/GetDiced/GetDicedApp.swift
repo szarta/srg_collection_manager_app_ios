@@ -19,6 +19,7 @@ struct GetDicedApp: App {
 
     @StateObject private var collectionViewModel: CollectionViewModel
     @StateObject private var syncViewModel: SyncViewModel
+    @StateObject private var cardSearchViewModel: CardSearchViewModel
 
     // MARK: - Initialization
 
@@ -33,6 +34,7 @@ struct GetDicedApp: App {
         // Initialize ViewModels with dependencies
         _collectionViewModel = StateObject(wrappedValue: CollectionViewModel(databaseService: dbService))
         _syncViewModel = StateObject(wrappedValue: SyncViewModel(databaseService: dbService, apiClient: api))
+        _cardSearchViewModel = StateObject(wrappedValue: CardSearchViewModel(databaseService: dbService))
     }
 
     var body: some Scene {
@@ -40,6 +42,7 @@ struct GetDicedApp: App {
             ContentView()
                 .environmentObject(collectionViewModel)
                 .environmentObject(syncViewModel)
+                .environmentObject(cardSearchViewModel)
                 .task {
                     // Print Documents directory for debugging
                     print("📂 Documents directory: \(ImageHelper.documentsPath())")
