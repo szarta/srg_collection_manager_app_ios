@@ -4,7 +4,7 @@ import Foundation
 
 /// Entity representing a card from the SRG database (synced from get-diced.com)
 /// Supports all 7 card types with optional fields for type-specific attributes
-struct Card: Identifiable, Codable {
+struct Card: Identifiable, Codable, Hashable {
     let id: String
     let name: String
     let cardType: String  // MainDeckCard, SingleCompetitorCard, TornadoCompetitorCard, etc.

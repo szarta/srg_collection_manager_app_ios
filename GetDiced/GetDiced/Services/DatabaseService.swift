@@ -99,6 +99,27 @@ class DatabaseService {
         print("✅ Database connection opened")
     }
 
+    /// Ensure default folders exist
+    func ensureDefaultFolders() async throws {
+        let defaultFolderNames = ["Owned", "Wanted", "Favorites", "For Trade"]
+
+        for (index, name) in defaultFolderNames.enumerated() {
+            let folderId = name.lowercased().replacingOccurrences(of: " ", with: "_")
+            let existing = try await getFolder(byId: folderId)
+
+            if existing == nil {
+                let folder = Folder(
+                    id: folderId,
+                    name: name,
+                    isDefault: true,
+                    displayOrder: index
+                )
+                try await saveFolder(folder)
+                print("✅ Created default folder: \(name)")
+            }
+        }
+    }
+
     // MARK: - Card Queries
 
     /// Get all cards (WARNING: 3,923 cards - use with pagination or filters)

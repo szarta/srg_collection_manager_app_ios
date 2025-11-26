@@ -116,3 +116,14 @@ iOSInjectionProject/
 
 # Debug files
 *.log
+
+# Card Images
+# Images are large (175MB+) and stored separately
+# Use copy_images.sh to copy from source directory
+GetDiced/GetDiced/Resources/images/
+GetDiced/Resources/images/
+**/images/mobile/
+*.webp
+
+# Temporary view files (consolidated into ContentView.swift)
+GetDiced/GetDiced/Views/

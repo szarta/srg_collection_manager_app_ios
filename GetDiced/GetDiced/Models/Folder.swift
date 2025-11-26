@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Folder Model
 
 /// Entity representing a collection folder (Owned, Wanted, Trade, or custom)
-struct Folder: Identifiable, Codable {
+struct Folder: Identifiable, Codable, Hashable {
     let id: String
     let name: String
     let isDefault: Bool  // true for Owned, Wanted, Trade
