@@ -124,7 +124,7 @@ class DatabaseService {
 
     /// Ensure default folders exist
     func ensureDefaultFolders() async throws {
-        let defaultFolderNames = ["Owned", "Wanted", "Favorites", "For Trade"]
+        let defaultFolderNames = ["Owned", "Wanted"]
 
         for (index, name) in defaultFolderNames.enumerated() {
             let folderId = name.lowercased().replacingOccurrences(of: " ", with: "_")
