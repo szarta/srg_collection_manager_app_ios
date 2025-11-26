@@ -1,6 +1,6 @@
 # 🚀 Quick Resume Guide
 
-**Status**: Day 2 Complete - Collection Tab with Images! 🎉
+**Status**: Day 2 Complete - Collection + Settings with Sync! 🎉
 **Date**: November 26, 2024
 
 ---
@@ -10,12 +10,15 @@
 **Day 1**: Foundation
 - Xcode project, models, services, database
 
-**Day 2**: Collection Tab
-- Full UI with tab navigation
+**Day 2**: Collection + Settings Tabs
+- Full UI with 4-tab navigation
 - Collection management (folders + cards)
 - **3,729 card images integrated!** 🖼️
-- MVVM architecture
-- Real database operations
+- **Database sync from server** ✨
+- **Image sync from server** ✨
+- Settings tab with sync UI
+- MVVM architecture with 2 ViewModels
+- Real database operations with transaction safety
 
 ---
 
@@ -23,18 +26,21 @@
 
 **Working App Features:**
 - 4-tab navigation (Collection, Viewer, Decks, Settings)
-- Full collection management
+- Full collection management (folders + cards)
 - Search 3,923 cards
 - Add/edit/delete cards from folders
 - **Beautiful card images throughout!**
+- **Database sync** - Update card catalog from server
+- **Image sync** - Download missing images
+- Settings with version info and sync UI
 
-**Next**: Build Viewer and Settings tabs
+**Next**: Build Viewer and Decks tabs
 
 ---
 
 ## 🎯 Today's Goals (Day 3)
 
-### Option 1: Card Viewer Tab (~2-3 hours)
+### Priority 1: Card Viewer Tab (~2-3 hours)
 1. **CardSearchViewModel** (~45 min)
    - Similar to CollectionViewModel
    - Filter states for card browsing
@@ -43,7 +49,7 @@
 2. **CardSearchView** (~1.5 hours)
    - Grid layout (2-column)
    - Filter chips
-   - Infinite scroll
+   - Lazy loading
    - Search bar integration
 
 3. **Test** (~30 min)
@@ -51,19 +57,25 @@
    - Test filters
    - Verify images load
 
-### Option 2: Settings Tab (~1 hour)
-1. **SettingsView** (~45 min)
-   - App version display
-   - Database info
-   - Links to website
-   - About section
+### Priority 2: Decks Tab (~4-5 hours)
+1. **DeckViewModel** (~1 hour)
+   - Deck CRUD operations
+   - Deck validation logic
 
-2. **Test** (~15 min)
-   - Verify all info displays
-   - Test links
+2. **DecksView + DeckListView** (~2 hours)
+   - List of deck folders
+   - List of decks in folder
+   - Create/delete decks
 
-### Option 3: Both! (~3-4 hours)
-Do Settings first (fast win), then Viewer tab
+3. **DeckEditorView** (~2 hours)
+   - Deck slot system
+   - Add/remove cards
+   - Deck validation
+
+4. **Test** (~30 min)
+   - Build decks
+   - Test validation
+   - Test card limits
 
 ---
 
@@ -98,22 +110,23 @@ xcodebuild -project GetDiced.xcodeproj \
 ### Current Structure
 ```
 GetDiced/GetDiced/
-├── ContentView.swift          870 lines - ALL UI
-├── GetDicedApp.swift          DI setup
+├── ContentView.swift          1,064 lines - ALL UI (Collection + Settings!)
+├── GetDicedApp.swift          DI setup with SyncViewModel
 ├── Models/                    7 files (Card, Folder, etc.)
 ├── Services/                  3 files
-│   ├── DatabaseService.swift
-│   ├── APIClient.swift
-│   └── ImageHelper.swift      NEW!
-├── ViewModels/
-│   └── CollectionViewModel.swift  NEW!
+│   ├── DatabaseService.swift  + databasePath() for sync
+│   ├── APIClient.swift        + sync endpoints
+│   └── ImageHelper.swift      Image loading
+├── ViewModels/                2 files!
+│   ├── CollectionViewModel.swift  138 lines
+│   └── SyncViewModel.swift        281 lines - NEW!
 └── Resources/
     └── cards_initial.db
 ```
 
 ### Files You'll Create Today
-- `GetDiced/ViewModels/CardSearchViewModel.swift` (if doing Viewer)
-- Update `ContentView.swift` to add CardSearchView/SettingsView
+- `GetDiced/ViewModels/CardSearchViewModel.swift` (for Viewer tab)
+- Update `ContentView.swift` to add CardSearchView
 
 ### Files for Reference
 - `VIEWMODELS_ARCHITECTURE.md` - ViewModel patterns
@@ -128,7 +141,7 @@ GetDiced/GetDiced/
 
 ## 📱 What Works Now
 
-**Try This:**
+**Collection Tab:**
 1. Run app (Cmd+R)
 2. Tap "Collection" → See 4 folders
 3. Tap "Owned" → Empty state
@@ -139,9 +152,18 @@ GetDiced/GetDiced/
 8. Tap card → Full details with stats
 9. Swipe left → Edit or delete
 
+**Settings Tab:**
+1. Tap "Settings" → See app info
+2. Tap "Check for Updates" → See server version
+3. Tap "Sync Database" → Watch progress bar
+4. Database updates with transaction safety!
+5. Tap "Download Missing Images" → See download progress
+6. All user data preserved during sync
+
 **Database**: 3,923 cards loaded
 **Images**: 3,729 card images ready
-**Features**: Add, edit, delete, search - all working!
+**Sync**: Database + image sync working!
+**Features**: Add, edit, delete, search, sync - all working!
 
 ---
 
@@ -172,27 +194,23 @@ struct CardSearchView: View {
 }
 ```
 
-### Settings Tab UI Pattern
-```swift
-struct SettingsView: View {
-    var body: some View {
-        Form {
-            Section("App") {
-                LabeledContent("Version", value: "1.0.0")
-                LabeledContent("Database", value: "v4 (3,923 cards)")
-            }
+### Settings Tab (DONE! ✅)
+**Already implemented in ContentView.swift**:
+- App version, build, bundle ID
+- Database version tracking
+- Check for updates from server
+- Sync database button
+- Download missing images button
+- Real-time progress bar
+- Last sync timestamp
+- External links
+- About section
 
-            Section("Links") {
-                Link("SRG Website",
-                     destination: URL(string: "https://srgsupershow.com")!)
-                Link("Get-Diced.com",
-                     destination: URL(string: "https://get-diced.com")!)
-            }
-        }
-        .navigationTitle("Settings")
-    }
-}
-```
+**Key Features**:
+- Transaction-safe database sync
+- Preserves user data (folders, decks)
+- Progress tracking with percentage
+- Error handling and recovery
 
 ---
 
@@ -237,25 +255,28 @@ git diff ContentView.swift  # See what changed
 
 ## 📊 Progress Tracker
 
-### Overall: 60% Complete
+### Overall: 75% Complete! 🚀
 
 ✅ **Complete**:
-- [x] Project setup
-- [x] Models & Services
-- [x] Database integration
-- [x] Tab navigation
-- [x] Collection tab (100%)
-- [x] Card images (3,729!)
-- [x] MVVM architecture
+- [x] Project setup (Day 1)
+- [x] Models & Services (Day 1)
+- [x] Database integration (Day 1)
+- [x] Tab navigation (Day 2)
+- [x] Collection tab (100%) - Day 2
+- [x] Settings tab (100%) - Day 2
+- [x] Card images (3,729!) - Day 2
+- [x] Database sync - Day 2
+- [x] Image sync - Day 2
+- [x] MVVM architecture - Day 2
+- [x] 2 ViewModels complete
 
 ⏳ **In Progress**:
 - [ ] Viewer tab (0%)
-- [ ] Settings tab (0%)
 - [ ] Decks tab (0%)
 
 🎯 **Next**:
-- Viewer tab + Settings = ~80% complete!
-- Then just Decks tab left
+- Viewer tab = ~85% complete!
+- Then just Decks tab left = 100%!
 
 ---
 
@@ -307,44 +328,47 @@ git diff ContentView.swift  # See what changed
 
 ---
 
-## 📝 Today's Recommended Plan
+## 📝 Today's Recommended Plan (Day 3)
 
-### Morning (2 hours):
-1. **Settings Tab** (1 hour) - Easy win!
-   - Version info
-   - Database stats
-   - Links
-   - About section
+### Session 1 (2-3 hours):
+1. **Viewer Tab** (2-3 hours)
+   - CardSearchViewModel (~45 min)
+   - CardSearchView grid (~1 hour)
+   - Filter UI (~30 min)
+   - Search integration (~30 min)
+   - Test and polish (~30 min)
 
-2. **Viewer Tab Start** (1 hour)
-   - CardSearchViewModel
-   - Basic grid layout
-   - Search integration
+### Result:
+- Viewer tab complete!
+- 85% overall progress!
+- Only Decks tab remaining!
 
-### Afternoon (2 hours):
-3. **Viewer Tab Finish** (2 hours)
-   - Filter UI
-   - Advanced search
-   - Polish grid display
+### Session 2 (Day 4-5):
+2. **Decks Tab** (4-5 hours)
+   - DeckViewModel
+   - DecksView + DeckListView
+   - DeckEditorView with slots
+   - Deck validation
    - Test thoroughly
 
 ### Result:
-- 2 more tabs done!
-- 80% complete!
-- Only Decks tab left!
+- All major features complete!
+- 95% overall progress!
+- Ready for polish and TestFlight!
 
 ---
 
-## 🎯 Success Criteria for Today
+## 🎯 Success Criteria for Day 3
 
 By end of session, you should have:
-- [ ] Settings tab showing app info
+- [ ] CardSearchViewModel implemented
 - [ ] Viewer tab with grid of cards
 - [ ] Search working in Viewer
-- [ ] Filters working (at least basic ones)
+- [ ] Filters working (type, division, etc.)
 - [ ] Card images in grid
 - [ ] Navigation to card detail working
-- [ ] ~80% app complete!
+- [ ] Lazy loading for performance
+- [ ] ~85% app complete!
 
 ---
 
@@ -358,4 +382,5 @@ By end of session, you should have:
 ---
 
 _Last updated: Nov 26, 2024 - End of Day 2_
-_Next: Build Viewer and Settings tabs!_
+_Next: Build Viewer tab with grid and filters!_
+_Day 2 Achievement: Collection + Settings with full sync! 75% complete!_
