@@ -99,6 +99,11 @@ class DatabaseService {
         print("✅ Database connection opened")
     }
 
+    /// Get the database file path
+    func databasePath() -> String {
+        return dbPath
+    }
+
     /// Ensure default folders exist
     func ensureDefaultFolders() async throws {
         let defaultFolderNames = ["Owned", "Wanted", "Favorites", "For Trade"]

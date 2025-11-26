@@ -890,9 +890,176 @@ struct DecksView: View {
 }
 
 struct SettingsView: View {
+    @EnvironmentObject var syncViewModel: SyncViewModel
+    @State private var showingSyncOptions = false
+
     var body: some View {
-        Text("Settings")
-            .navigationTitle("Settings")
+        Form {
+            // App Info Section
+            Section("App Information") {
+                LabeledContent("Version", value: "1.0.0")
+                LabeledContent("Build", value: "1")
+                LabeledContent("Bundle ID", value: "com.srg.GetDiced")
+            }
+
+            // Database Section
+            Section("Database") {
+                LabeledContent("Current Version", value: "v\(syncViewModel.currentDatabaseVersion)")
+
+                if let latest = syncViewModel.latestDatabaseVersion {
+                    LabeledContent("Latest Version", value: "v\(latest)")
+                }
+
+                if syncViewModel.updateAvailable {
+                    HStack {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Update Available")
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Button {
+                    Task {
+                        await syncViewModel.checkForUpdates()
+                    }
+                } label: {
+                    HStack {
+                        Text("Check for Updates")
+                        if syncViewModel.isSyncing {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(syncViewModel.isSyncing)
+
+                if syncViewModel.updateAvailable {
+                    Button {
+                        showingSyncOptions = true
+                    } label: {
+                        Label("Sync Database", systemImage: "arrow.down.circle.fill")
+                    }
+                    .disabled(syncViewModel.isSyncing)
+                }
+
+                if let lastSync = syncViewModel.lastSyncDate {
+                    LabeledContent("Last Synced", value: lastSync.formatted(date: .abbreviated, time: .shortened))
+                }
+            }
+
+            // Images Section
+            Section("Card Images") {
+                if syncViewModel.totalImages > 0 {
+                    LabeledContent("Total Cards", value: "\(syncViewModel.totalImages)")
+                    LabeledContent("Downloaded", value: "\(syncViewModel.downloadedImages)")
+                }
+
+                Button {
+                    Task {
+                        await syncViewModel.syncImages()
+                    }
+                } label: {
+                    HStack {
+                        Text("Download Missing Images")
+                        if syncViewModel.isSyncing {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(syncViewModel.isSyncing)
+            }
+
+            // Sync Progress
+            if syncViewModel.isSyncing {
+                Section("Sync Progress") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ProgressView(value: syncViewModel.syncProgress)
+                        Text(syncViewModel.syncMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Status Messages
+            if !syncViewModel.syncMessage.isEmpty && !syncViewModel.isSyncing {
+                Section {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text(syncViewModel.syncMessage)
+                            .font(.callout)
+                    }
+                }
+            }
+
+            // Storage Section
+            Section("Storage") {
+                LabeledContent("Documents Path") {
+                    Text(ImageHelper.documentsPath())
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            // Links Section
+            Section("Links") {
+                Link(destination: URL(string: "https://srgsupershow.com")!) {
+                    HStack {
+                        Label("SRG Website", systemImage: "safari")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Link(destination: URL(string: "https://get-diced.com")!) {
+                    HStack {
+                        Label("Get-Diced.com", systemImage: "globe")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // About Section
+            Section("About") {
+                Text("Get Diced is the unofficial companion app for the SRG Universe trading card game. Manage your collection, build decks, and browse all cards.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Settings")
+        .alert("Sync Database?", isPresented: $showingSyncOptions) {
+            Button("Cancel", role: .cancel) { }
+            Button("Sync Now") {
+                Task {
+                    await syncViewModel.syncDatabase()
+                }
+            }
+        } message: {
+            Text("This will update your card database to v\(syncViewModel.latestDatabaseVersion ?? 0). Your collection and decks will be preserved.")
+        }
+        .alert("Error", isPresented: .constant(syncViewModel.errorMessage != nil)) {
+            Button("OK") {
+                syncViewModel.errorMessage = nil
+            }
+        } message: {
+            if let error = syncViewModel.errorMessage {
+                Text(error)
+            }
+        }
+        .task {
+            // Check for updates on load
+            await syncViewModel.checkForUpdates()
+        }
     }
 }
 
