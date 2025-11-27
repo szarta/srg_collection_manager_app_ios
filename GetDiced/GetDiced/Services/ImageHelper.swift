@@ -26,9 +26,8 @@ struct ImageHelper {
             return localURL
         }
 
-        // Fallback to server (placeholder for now)
-        // return URL(string: "https://get-diced.com/\(imagePath)")
-        return nil
+        // Fallback to server
+        return URL(string: "https://get-diced.com/\(imagePath)")
     }
 
     /// Copy images from source directory to app Documents

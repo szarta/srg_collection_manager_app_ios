@@ -115,6 +115,45 @@ class DatabaseService {
     private func openConnection() throws {
         db = try Connection(dbPath)
         print("✅ Database connection opened")
+
+        // Ensure deck tables exist (migration for Day 4 features)
+        try createDeckTablesIfNeeded()
+    }
+
+    /// Create deck tables if they don't exist (for migration from v1.0 to v1.0+)
+    private func createDeckTablesIfNeeded() throws {
+        guard let db = db else { return }
+
+        // Create deck_folders table
+        try db.run(deckFolders.create(ifNotExists: true) { table in
+            table.column(df_id, primaryKey: true)
+            table.column(df_name, unique: true)
+            table.column(df_isDefault, defaultValue: false)
+            table.column(df_displayOrder, defaultValue: 0)
+        })
+
+        // Create decks table
+        try db.run(decks.create(ifNotExists: true) { table in
+            table.column(deck_id, primaryKey: true)
+            table.column(deck_folderId)
+            table.column(deck_name)
+            table.column(deck_spectacleType, defaultValue: "valiant")
+            table.column(deck_createdAt)
+            table.column(deck_modifiedAt)
+            table.foreignKey(deck_folderId, references: deckFolders, df_id, delete: .cascade)
+        })
+
+        // Create deck_cards table
+        try db.run(deckCards.create(ifNotExists: true) { table in
+            table.column(dc_deckId)
+            table.column(dc_cardUuid)
+            table.column(dc_slotType)
+            table.column(dc_slotNumber)
+            table.primaryKey(dc_deckId, dc_slotType, dc_slotNumber)
+            table.foreignKey(dc_deckId, references: decks, deck_id, delete: .cascade)
+        })
+
+        print("✅ Deck tables verified/created")
     }
 
     /// Get the database file path
