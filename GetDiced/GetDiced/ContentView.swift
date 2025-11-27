@@ -373,61 +373,36 @@ struct AddCardToFolderSheet: View {
     @State private var searchQuery = ""
     @State private var searchResults: [Card] = []
     @State private var isSearching = false
-    @State private var selectedCard: Card?
-    @State private var quantity: Int = 1
     @State private var cardToView: Card?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                if let card = selectedCard {
-                    // Show selected card and quantity picker
-                    selectedCardView(card: card)
-                } else {
-                    // Show search results
-                    searchResultsView
-                }
-            }
-            .navigationTitle("Add Card")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchQuery, prompt: "Search cards...")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
+            searchResultsView
+                .navigationTitle("Add Card")
+                .navigationBarTitleDisplayMode(.inline)
+                .searchable(text: $searchQuery, prompt: "Search cards...")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            dismiss()
+                        }
                     }
                 }
-
-                if selectedCard != nil {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Add") {
+                .toolbar(.visible, for: .navigationBar)
+            .sheet(item: $cardToView) { card in
+                NavigationStack {
+                    CardDetailWithQuantityView(
+                        card: card,
+                        folder: folder,
+                        onDismiss: { cardToView = nil },
+                        onAdd: { quantity in
                             Task {
-                                if let card = selectedCard {
-                                    await viewModel.addCard(card, toFolder: folder.id, quantity: quantity)
-                                }
+                                await viewModel.addCard(card, toFolder: folder.id, quantity: quantity)
+                                cardToView = nil
                                 dismiss()
                             }
                         }
-                    }
-                }
-            }
-            .toolbar(.visible, for: .navigationBar)
-            .sheet(item: $cardToView) { card in
-                NavigationStack {
-                    CardDetailView(card: card, showToolbarLink: false)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Close") {
-                                    cardToView = nil
-                                }
-                            }
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Add") {
-                                    selectedCard = card
-                                    cardToView = nil
-                                }
-                            }
-                        }
+                    )
                 }
             }
             .onChange(of: searchQuery) { newValue in
@@ -438,29 +413,6 @@ struct AddCardToFolderSheet: View {
             .task {
                 // Load initial cards
                 await performSearch(query: "")
-            }
-        }
-    }
-
-    @ViewBuilder
-    func selectedCardView(card: Card) -> some View {
-        Form {
-            Section {
-                CardRow(card: card)
-            } header: {
-                Text("Selected Card")
-            }
-
-            Section {
-                Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
-            } header: {
-                Text("Quantity")
-            }
-
-            Section {
-                Button("Change Card") {
-                    selectedCard = nil
-                }
             }
         }
     }
@@ -524,6 +476,61 @@ struct AddCardToFolderSheet: View {
         }
 
         isSearching = false
+    }
+}
+
+// MARK: - Card Detail with Quantity (for adding to collection)
+
+struct CardDetailWithQuantityView: View {
+    let card: Card
+    let folder: Folder
+    let onDismiss: () -> Void
+    let onAdd: (Int) -> Void
+
+    @State private var quantity: Int = 1
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Card detail in scrollable area
+            CardDetailView(card: card, showToolbarLink: false)
+
+            // Quantity picker at bottom (always visible)
+            VStack(spacing: 0) {
+                Divider()
+
+                HStack {
+                    Text("Quantity")
+                        .font(.headline)
+
+                    Spacer()
+
+                    Stepper("\(quantity)", value: $quantity, in: 1...99)
+                        .labelsHidden()
+
+                    Text("\(quantity)")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                        .frame(minWidth: 40, alignment: .trailing)
+                }
+                .padding()
+                .background(.regularMaterial)
+            }
+        }
+        .navigationTitle(card.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") {
+                    onDismiss()
+                }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Add") {
+                    onAdd(quantity)
+                }
+            }
+        }
     }
 }
 
