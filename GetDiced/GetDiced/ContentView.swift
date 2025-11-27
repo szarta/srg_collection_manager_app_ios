@@ -1502,6 +1502,7 @@ struct DeckEditorView: View {
                 } else {
                     Button(action: {
                         selectedSlotType = .entrance
+                        selectedSlotNumber = 0
                         showingCardPicker = true
                     }) {
                         HStack {
@@ -1519,6 +1520,7 @@ struct DeckEditorView: View {
                 } else {
                     Button(action: {
                         selectedSlotType = .competitor
+                        selectedSlotNumber = 0
                         showingCardPicker = true
                     }) {
                         HStack {
@@ -1562,31 +1564,6 @@ struct DeckEditorView: View {
                                     .foregroundColor(.secondary)
                             }
                         }
-                    }
-                }
-            }
-
-            // Finishes
-            Section("Finishes (\(viewModel.finishCards.count))") {
-                ForEach(viewModel.finishCards) { cardDetails in
-                    CardRow(card: cardDetails.card)
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                Task {
-                                    await viewModel.removeCard(from: deck.id, slotType: .finish, slotNumber: cardDetails.slotNumber)
-                                }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                }
-                Button(action: {
-                    selectedSlotType = .finish
-                    showingCardPicker = true
-                }) {
-                    HStack {
-                        Image(systemName: "plus.circle")
-                        Text("Add Finish")
                     }
                 }
             }
@@ -1675,7 +1652,8 @@ struct AddCardToDeckSheet: View {
                                 case .deck:
                                     await viewModel.setDeckCard(card, in: deckId, slotNumber: slotNumber)
                                 case .finish:
-                                    await viewModel.addFinish(card, to: deckId)
+                                    // Finishes not used - cards 28-30 are finish cards in deck
+                                    break
                                 case .alternate:
                                     await viewModel.addAlternate(card, to: deckId)
                                 }
@@ -1771,17 +1749,8 @@ struct AddCardToDeckSheet: View {
                 availableCards = allMainDeck.filter { $0.deckCardNumber == slotNumber }
 
             case .finish:
-                // Only MainDeckCard type for finishes
-                availableCards = try await dbService.searchCards(
-                    query: nil,
-                    cardType: "MainDeckCard",
-                    atkType: nil,
-                    playOrder: nil,
-                    division: nil,
-                    releaseSet: nil,
-                    isBanned: nil,
-                    limit: 1000
-                )
+                // Finishes not used - cards 28-30 are finish cards in deck
+                availableCards = []
 
             case .alternate:
                 // Any card type
