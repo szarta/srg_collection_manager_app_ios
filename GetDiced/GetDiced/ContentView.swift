@@ -375,7 +375,6 @@ struct AddCardToFolderSheet: View {
     @State private var isSearching = false
     @State private var selectedCard: Card?
     @State private var quantity: Int = 1
-    @State private var showCardDetail = false
     @State private var cardToView: Card?
 
     var body: some View {
@@ -413,24 +412,22 @@ struct AddCardToFolderSheet: View {
                 }
             }
             .toolbar(.visible, for: .navigationBar)
-            .sheet(isPresented: $showCardDetail) {
-                if let card = cardToView {
-                    NavigationStack {
-                        CardDetailView(card: card, showToolbarLink: false)
-                            .toolbar {
-                                ToolbarItem(placement: .cancellationAction) {
-                                    Button("Close") {
-                                        showCardDetail = false
-                                    }
-                                }
-                                ToolbarItem(placement: .confirmationAction) {
-                                    Button("Add") {
-                                        selectedCard = card
-                                        showCardDetail = false
-                                    }
+            .sheet(item: $cardToView) { card in
+                NavigationStack {
+                    CardDetailView(card: card, showToolbarLink: false)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") {
+                                    cardToView = nil
                                 }
                             }
-                    }
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Add") {
+                                    selectedCard = card
+                                    cardToView = nil
+                                }
+                            }
+                        }
                 }
             }
             .onChange(of: searchQuery) { newValue in
@@ -494,7 +491,6 @@ struct AddCardToFolderSheet: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             cardToView = card
-                            showCardDetail = true
                         }
                 }
             }
