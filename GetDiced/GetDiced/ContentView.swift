@@ -410,6 +410,7 @@ struct AddCardToFolderSheet: View {
                     }
                 }
             }
+            .toolbar(.visible, for: .navigationBar)
             .onChange(of: searchQuery) { newValue in
                 Task {
                     await performSearch(query: newValue)
