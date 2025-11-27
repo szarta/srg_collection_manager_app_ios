@@ -161,23 +161,35 @@ class DatabaseService {
         return dbPath
     }
 
-    /// Ensure default folders exist
+    /// Ensure default folders exist (matches Android app)
     func ensureDefaultFolders() async throws {
-        let defaultFolderNames = ["Owned", "Wanted"]
+        // Default folders matching Android app
+        let defaultFolders = [
+            ("owned", "Owned", 0),
+            ("wanted", "Wanted", 1),
+            ("trade", "Trade", 2)
+        ]
 
-        for (index, name) in defaultFolderNames.enumerated() {
-            let folderId = name.lowercased().replacingOccurrences(of: " ", with: "_")
-            let existing = try await getFolder(byId: folderId)
-
+        for (id, name, order) in defaultFolders {
+            let existing = try await getFolder(byId: id)
             if existing == nil {
                 let folder = Folder(
-                    id: folderId,
+                    id: id,
                     name: name,
                     isDefault: true,
-                    displayOrder: index
+                    displayOrder: order
                 )
                 try await saveFolder(folder)
                 print("✅ Created default folder: \(name)")
+            }
+        }
+
+        // Remove old folders that don't match Android app
+        let foldersToRemove = ["favorites", "for_trade"]
+        for folderId in foldersToRemove {
+            if let folder = try await getFolder(byId: folderId) {
+                try await deleteFolder(byId: folderId)
+                print("🗑️ Removed legacy folder: \(folder.name)")
             }
         }
     }
