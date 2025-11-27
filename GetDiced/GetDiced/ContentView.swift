@@ -570,20 +570,9 @@ struct CardDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    if let srgUrl = card.srgUrl, let url = URL(string: srgUrl) {
-                        Link(destination: url) {
-                            Label("View on SRG Website", systemImage: "safari")
-                        }
-                    }
-
-                    if let srgpcUrl = card.srgpcUrl, let url = URL(string: srgpcUrl) {
-                        Link(destination: url) {
-                            Label("View on SRGPC", systemImage: "link")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                let getDicedUrl = URL(string: "https://get-diced.com/card/\(card.id)")!
+                Link(destination: getDicedUrl) {
+                    Label("View on get-diced.com", systemImage: "safari")
                 }
             }
         }
