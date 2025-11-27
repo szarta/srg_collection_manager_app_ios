@@ -416,7 +416,7 @@ struct AddCardToFolderSheet: View {
             .sheet(isPresented: $showCardDetail) {
                 if let card = cardToView {
                     NavigationStack {
-                        CardDetailView(card: card)
+                        CardDetailView(card: card, showToolbarLink: false)
                             .toolbar {
                                 ToolbarItem(placement: .cancellationAction) {
                                     Button("Close") {
@@ -424,7 +424,7 @@ struct AddCardToFolderSheet: View {
                                     }
                                 }
                                 ToolbarItem(placement: .confirmationAction) {
-                                    Button("Add This Card") {
+                                    Button("Add") {
                                         selectedCard = card
                                         showCardDetail = false
                                     }
@@ -535,6 +535,7 @@ struct AddCardToFolderSheet: View {
 
 struct CardDetailView: View {
     let card: Card
+    var showToolbarLink: Bool = true
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -563,17 +564,42 @@ struct CardDetailView: View {
 
                 // Additional Info
                 additionalInfoSection
+
+                // Web link (when not in toolbar)
+                if !showToolbarLink {
+                    webLinkSection
+                }
             }
             .padding()
         }
         .navigationTitle(card.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                let getDicedUrl = URL(string: "https://get-diced.com/card/\(card.id)")!
-                Link(destination: getDicedUrl) {
-                    Label("View on get-diced.com", systemImage: "safari")
+            if showToolbarLink {
+                ToolbarItem(placement: .primaryAction) {
+                    let getDicedUrl = URL(string: "https://get-diced.com/card/\(card.id)")!
+                    Link(destination: getDicedUrl) {
+                        Label("View on get-diced.com", systemImage: "safari")
+                    }
                 }
+            }
+        }
+    }
+
+    var webLinkSection: some View {
+        VStack(spacing: 12) {
+            let getDicedUrl = URL(string: "https://get-diced.com/card/\(card.id)")!
+            Link(destination: getDicedUrl) {
+                HStack {
+                    Image(systemName: "safari")
+                    Text("View on get-diced.com")
+                    Spacer()
+                    Image(systemName: "arrow.up.forward.square")
+                        .font(.caption)
+                }
+                .padding()
+                .background(.regularMaterial)
+                .cornerRadius(12)
             }
         }
     }
