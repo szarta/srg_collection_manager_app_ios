@@ -1365,7 +1365,6 @@ struct DeckListView: View {
     @EnvironmentObject var viewModel: DeckViewModel
     @State private var showAddDeck = false
     @State private var newDeckName = ""
-    @State private var selectedSpectacleType: SpectacleType = .valiant
 
     var body: some View {
         Group {
@@ -1416,11 +1415,6 @@ struct DeckListView: View {
             NavigationStack {
                 Form {
                     TextField("Deck Name", text: $newDeckName)
-
-                    Picker("Spectacle Type", selection: $selectedSpectacleType) {
-                        Text("Valiant").tag(SpectacleType.valiant)
-                        Text("Newman").tag(SpectacleType.newman)
-                    }
                 }
                 .navigationTitle("New Deck")
                 .navigationBarTitleDisplayMode(.inline)
@@ -1437,7 +1431,7 @@ struct DeckListView: View {
                                 await viewModel.createDeck(
                                     in: folder.id,
                                     name: newDeckName,
-                                    spectacleType: selectedSpectacleType
+                                    spectacleType: .valiant  // Default to Valiant
                                 )
                                 showAddDeck = false
                                 newDeckName = ""
@@ -1483,6 +1477,22 @@ struct DeckEditorView: View {
 
     var body: some View {
         List {
+            // Spectacle Type
+            Section("Spectacle Type") {
+                Picker("Type", selection: Binding(
+                    get: { deck.spectacleType },
+                    set: { newType in
+                        Task {
+                            await viewModel.updateDeckSpectacleType(deck.id, spectacleType: newType)
+                        }
+                    }
+                )) {
+                    Text("Valiant").tag(SpectacleType.valiant)
+                    Text("Newman").tag(SpectacleType.newman)
+                }
+                .pickerStyle(.segmented)
+            }
+
             // Entrance
             Section("Entrance") {
                 if let entrance = viewModel.entrance {

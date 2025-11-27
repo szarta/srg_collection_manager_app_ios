@@ -610,6 +610,18 @@ class DatabaseService {
         try db.run(row.update(deck_modifiedAt <- now))
     }
 
+    /// Update deck spectacle type
+    func updateDeckSpectacleType(_ deckId: String, spectacleType: SpectacleType) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let row = decks.filter(deck_id == deckId)
+        try db.run(row.update(
+            deck_spectacleType <- spectacleType.rawValue,
+            deck_modifiedAt <- now
+        ))
+    }
+
     /// Delete deck
     func deleteDeck(byId id: String) async throws {
         guard let db = db else { throw DatabaseError.notConnected }

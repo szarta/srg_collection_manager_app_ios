@@ -128,6 +128,16 @@ class DeckViewModel: ObservableObject {
         }
     }
 
+    /// Update deck spectacle type
+    func updateDeckSpectacleType(_ deckId: String, spectacleType: SpectacleType) async {
+        do {
+            try await databaseService.updateDeckSpectacleType(deckId, spectacleType: spectacleType)
+            await loadDeckCards(deckId)
+        } catch {
+            errorMessage = "Failed to update spectacle type: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Deck Card Operations
 
     /// Load cards in selected deck
