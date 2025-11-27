@@ -1479,18 +1479,20 @@ struct DeckEditorView: View {
         List {
             // Spectacle Type
             Section("Spectacle Type") {
-                Picker("Type", selection: Binding(
-                    get: { deck.spectacleType },
-                    set: { newType in
-                        Task {
-                            await viewModel.updateDeckSpectacleType(deck.id, spectacleType: newType)
+                if let currentDeck = viewModel.selectedDeck {
+                    Picker("Type", selection: Binding(
+                        get: { currentDeck.spectacleType },
+                        set: { newType in
+                            Task {
+                                await viewModel.updateDeckSpectacleType(deck.id, spectacleType: newType)
+                            }
                         }
+                    )) {
+                        Text("Valiant").tag(SpectacleType.valiant)
+                        Text("Newman").tag(SpectacleType.newman)
                     }
-                )) {
-                    Text("Valiant").tag(SpectacleType.valiant)
-                    Text("Newman").tag(SpectacleType.newman)
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
             }
 
             // Entrance
@@ -1616,11 +1618,13 @@ struct DeckEditorView: View {
         }
         .navigationTitle(deck.name)
         .task {
+            viewModel.selectedDeck = deck
             await viewModel.loadDeckCards(deck.id)
         }
         .sheet(isPresented: $showingCardPicker) {
             AddCardToDeckSheet(
                 deckId: deck.id,
+                folderId: deck.folderId,
                 slotType: selectedSlotType,
                 slotNumber: selectedSlotNumber
             )
@@ -1632,6 +1636,7 @@ struct DeckEditorView: View {
 
 struct AddCardToDeckSheet: View {
     let deckId: String
+    let folderId: String
     let slotType: DeckSlotType
     let slotNumber: Int
 
@@ -1641,20 +1646,25 @@ struct AddCardToDeckSheet: View {
     @State private var searchQuery = ""
     @State private var searchResults: [Card] = []
     @State private var isSearching = false
+    @State private var availableCards: [Card] = []
 
     var body: some View {
         NavigationStack {
             Group {
-                if searchResults.isEmpty && !searchQuery.isEmpty {
+                let cardsToShow = searchQuery.isEmpty ? availableCards : searchResults
+
+                if isSearching {
+                    ProgressView("Loading cards...")
+                } else if cardsToShow.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 48))
                             .foregroundColor(.secondary)
-                        Text("No cards found")
+                        Text(searchQuery.isEmpty ? "No cards available" : "No cards found")
                             .font(.headline)
                     }
                 } else {
-                    List(searchResults) { card in
+                    List(cardsToShow) { card in
                         Button(action: {
                             Task {
                                 switch slotType {
@@ -1681,9 +1691,10 @@ struct AddCardToDeckSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchQuery, prompt: "Search cards...")
             .onChange(of: searchQuery) { newValue in
-                Task {
-                    await performSearch(newValue)
-                }
+                performSearch(newValue)
+            }
+            .task {
+                await loadAvailableCards()
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1695,19 +1706,114 @@ struct AddCardToDeckSheet: View {
         }
     }
 
-    private func performSearch(_ query: String) async {
+    private func loadAvailableCards() async {
+        isSearching = true
+        do {
+            let dbService = viewModel.databaseService
+
+            // Filter cards based on slot type and folder (matching Android logic)
+            switch slotType {
+            case .entrance:
+                // Only EntranceCard type
+                availableCards = try await dbService.searchCards(
+                    query: nil,
+                    cardType: "EntranceCard",
+                    atkType: nil,
+                    playOrder: nil,
+                    division: nil,
+                    releaseSet: nil,
+                    isBanned: nil,
+                    limit: 1000
+                )
+
+            case .competitor:
+                // Depends on folder
+                let cardType: String
+                switch folderId {
+                case "singles":
+                    cardType = "SingleCompetitorCard"
+                case "tornado":
+                    cardType = "TornadoCompetitorCard"
+                case "trios":
+                    cardType = "TrioCompetitorCard"
+                default:
+                    // Tag or custom folders - load all competitor types
+                    let singles = try await dbService.searchCards(query: nil, cardType: "SingleCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, limit: 1000)
+                    let tornado = try await dbService.searchCards(query: nil, cardType: "TornadoCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, limit: 1000)
+                    let trios = try await dbService.searchCards(query: nil, cardType: "TrioCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, limit: 1000)
+                    availableCards = (singles + tornado + trios).sorted { $0.name < $1.name }
+                    isSearching = false
+                    return
+                }
+                availableCards = try await dbService.searchCards(
+                    query: nil,
+                    cardType: cardType,
+                    atkType: nil,
+                    playOrder: nil,
+                    division: nil,
+                    releaseSet: nil,
+                    isBanned: nil,
+                    limit: 1000
+                )
+
+            case .deck:
+                // Only MainDeckCard type with matching deck_card_number
+                let allMainDeck = try await dbService.searchCards(
+                    query: nil,
+                    cardType: "MainDeckCard",
+                    atkType: nil,
+                    playOrder: nil,
+                    division: nil,
+                    releaseSet: nil,
+                    isBanned: nil,
+                    limit: 1000
+                )
+                availableCards = allMainDeck.filter { $0.deckCardNumber == slotNumber }
+
+            case .finish:
+                // Only MainDeckCard type for finishes
+                availableCards = try await dbService.searchCards(
+                    query: nil,
+                    cardType: "MainDeckCard",
+                    atkType: nil,
+                    playOrder: nil,
+                    division: nil,
+                    releaseSet: nil,
+                    isBanned: nil,
+                    limit: 1000
+                )
+
+            case .alternate:
+                // Any card type
+                availableCards = try await dbService.searchCards(
+                    query: nil,
+                    cardType: nil,
+                    atkType: nil,
+                    playOrder: nil,
+                    division: nil,
+                    releaseSet: nil,
+                    isBanned: nil,
+                    limit: 1000
+                )
+            }
+
+        } catch {
+            print("Error loading available cards: \(error)")
+            availableCards = []
+        }
+        isSearching = false
+    }
+
+    private func performSearch(_ query: String) {
         guard !query.isEmpty else {
             searchResults = []
             return
         }
 
-        isSearching = true
-        do {
-            searchResults = try await viewModel.databaseService.searchCards(query: query, limit: 50)
-        } catch {
-            searchResults = []
+        // Search within available cards
+        searchResults = availableCards.filter { card in
+            card.name.localizedCaseInsensitiveContains(query)
         }
-        isSearching = false
     }
 }
 

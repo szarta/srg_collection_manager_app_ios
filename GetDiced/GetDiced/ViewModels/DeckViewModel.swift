@@ -132,6 +132,8 @@ class DeckViewModel: ObservableObject {
     func updateDeckSpectacleType(_ deckId: String, spectacleType: SpectacleType) async {
         do {
             try await databaseService.updateDeckSpectacleType(deckId, spectacleType: spectacleType)
+            // Reload the deck to get updated spectacle type
+            selectedDeck = try await databaseService.getDeck(byId: deckId)
             await loadDeckCards(deckId)
         } catch {
             errorMessage = "Failed to update spectacle type: \(error.localizedDescription)"
