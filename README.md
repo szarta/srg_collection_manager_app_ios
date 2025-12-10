@@ -22,11 +22,15 @@ A native iOS app for managing your SRG (Super Rare Games) card collection and bu
 - **Complete Deck Editor**: Build tournament-ready decks with:
   - Entrance card (1)
   - Competitor card (1)
-  - Main deck (30 cards)
-  - Finishes (multiple)
+  - Main deck (30 cards, slots 27-30 are finish slots)
   - Alternates (multiple)
 - **Deck Validation**: Real-time validation ensures decks meet tournament requirements
 - **Quick Card Search**: Search and add cards directly from the deck editor
+- **Intuitive Card Management**:
+  - Tap any card to view full details
+  - Long-press for context menu (Replace/Remove)
+  - Swipe-to-delete on Main Deck and Alternates
+- **Rename Support**: Rename decks and folders with a single tap
 
 ### Data Sync
 - **API Integration**: Sync with centralized card database
