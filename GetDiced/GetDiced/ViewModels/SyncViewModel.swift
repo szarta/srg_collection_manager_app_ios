@@ -21,7 +21,7 @@ class SyncViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     // Manifest info
-    @Published var currentDatabaseVersion: Int = 4
+    @Published var currentDatabaseVersion: Int = 0
     @Published var latestDatabaseVersion: Int?
     @Published var updateAvailable: Bool = false
 
@@ -33,6 +33,7 @@ class SyncViewModel: ObservableObject {
 
     private let databaseService: DatabaseService
     private let apiClient: APIClient
+    private let imageSyncService = ImageSyncService()
 
     // MARK: - Initialization
 
@@ -40,6 +41,7 @@ class SyncViewModel: ObservableObject {
         self.databaseService = databaseService
         self.apiClient = apiClient
         self.loadLastSyncDate()
+        self.loadDatabaseVersion()
     }
 
     // MARK: - Sync Operations
@@ -102,6 +104,7 @@ class SyncViewModel: ObservableObject {
             currentDatabaseVersion = manifest.version
             lastSyncDate = Date()
             saveLastSyncDate()
+            saveDatabaseVersion()
             syncMessage = "Database updated to v\(manifest.version)! ✅"
 
             // Clean up temp file
@@ -115,7 +118,7 @@ class SyncViewModel: ObservableObject {
         isSyncing = false
     }
 
-    /// Sync images from server
+    /// Sync images from server using manifest-based approach
     func syncImages() async {
         isSyncing = true
         syncProgress = 0.0
@@ -124,62 +127,22 @@ class SyncViewModel: ObservableObject {
         syncMessage = "Checking for missing images..."
 
         do {
-            // 1. Get all card IDs from database
-            let cards = try await databaseService.getAllCards()
-            totalImages = cards.count
-
-            syncMessage = "Found \(totalImages) cards in database"
-
-            // 2. Check which images are missing
-            var missingCards: [Card] = []
-            for card in cards {
-                if ImageHelper.imageURL(for: card.id) == nil {
-                    missingCards.append(card)
+            // Use the new manifest-based sync
+            let (downloaded, total) = try await imageSyncService.syncImages { downloaded, total in
+                Task { @MainActor in
+                    self.downloadedImages = downloaded
+                    self.totalImages = total
+                    self.syncProgress = Double(downloaded) / Double(total)
+                    self.syncMessage = "Downloading images: \(downloaded)/\(total)"
                 }
             }
 
-            if missingCards.isEmpty {
-                syncMessage = "All images downloaded! ✅"
-                lastSyncDate = Date()
-                saveLastSyncDate()
-                isSyncing = false
-                return
+            if downloaded == 0 {
+                syncMessage = "All images up to date! ✅"
+            } else {
+                syncMessage = "Downloaded \(downloaded) images! ✅"
             }
 
-            syncMessage = "Downloading \(missingCards.count) missing images..."
-
-            // 3. Download missing images
-            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let imagesBaseURL = documentsURL.appendingPathComponent("images/mobile")
-
-            for (index, card) in missingCards.enumerated() {
-                let cardId = card.id
-                let first2 = String(cardId.prefix(2))
-                let imagePath = "\(first2)/\(cardId).webp"
-
-                do {
-                    // Download image
-                    let imageData = try await apiClient.downloadImage(path: imagePath)
-
-                    // Create directory if needed
-                    let dirURL = imagesBaseURL.appendingPathComponent(first2)
-                    try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
-
-                    // Save image
-                    let fileURL = dirURL.appendingPathComponent("\(cardId).webp")
-                    try imageData.write(to: fileURL)
-
-                    downloadedImages = index + 1
-                    syncProgress = Double(downloadedImages) / Double(missingCards.count)
-                    syncMessage = "Downloaded \(downloadedImages) of \(missingCards.count) images..."
-
-                } catch {
-                    print("Failed to download image for \(cardId): \(error)")
-                    // Continue with next image
-                }
-            }
-
-            syncMessage = "Downloaded \(downloadedImages) images! ✅"
             lastSyncDate = Date()
             saveLastSyncDate()
 
@@ -189,6 +152,22 @@ class SyncViewModel: ObservableObject {
         }
 
         isSyncing = false
+    }
+
+    /// Get image sync status without downloading
+    func checkImageSyncStatus() async {
+        do {
+            let (needSync, total) = try await imageSyncService.getSyncStatus()
+            totalImages = total
+
+            if needSync == 0 {
+                syncMessage = "All \(total) images synced ✅"
+            } else {
+                syncMessage = "\(needSync) of \(total) images need syncing"
+            }
+        } catch {
+            errorMessage = "Failed to check image status: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Helper Methods
@@ -219,17 +198,39 @@ class SyncViewModel: ObservableObject {
         do {
             // Begin transaction for atomic operation
             try userDb.transaction {
+                print("🔄 Starting database merge transaction...")
+
                 // Step 1: Clear existing card data (preserves user data)
-                try userDb.run("DELETE FROM card_related_finishes")
-                try userDb.run("DELETE FROM card_related_cards")
-                try userDb.run("DELETE FROM cards")
+                // Use DELETE OR IGNORE to handle cases where tables might be empty
+                print("🗑️ Clearing existing card data...")
+                do {
+                    try userDb.execute("DELETE FROM card_related_finishes")
+                    print("✅ Cleared card_related_finishes")
+                } catch {
+                    print("⚠️ Warning clearing card_related_finishes: \(error)")
+                }
+
+                do {
+                    try userDb.execute("DELETE FROM card_related_cards")
+                    print("✅ Cleared card_related_cards")
+                } catch {
+                    print("⚠️ Warning clearing card_related_cards: \(error)")
+                }
+
+                do {
+                    try userDb.execute("DELETE FROM cards")
+                    print("✅ Cleared cards")
+                } catch {
+                    print("⚠️ Warning clearing cards: \(error)")
+                }
 
                 // Step 2: ATTACH the temp database and copy data
-                // This is more efficient than iterating row by row
+                print("📎 Attaching temporary database...")
                 try userDb.execute("ATTACH DATABASE '\(tempURL.path)' AS temp_db")
 
                 // Copy all cards in one statement
-                try userDb.run("""
+                print("📥 Copying cards from temp database...")
+                try userDb.execute("""
                     INSERT INTO cards
                     SELECT * FROM temp_db.cards
                 """)
@@ -237,30 +238,47 @@ class SyncViewModel: ObservableObject {
                 // Get count of cards inserted
                 let count = try userDb.scalar("SELECT COUNT(*) FROM cards") as! Int64
                 cardsUpdated = Int(count)
+                print("✅ Inserted \(cardsUpdated) cards")
 
                 // Copy related finishes
-                try userDb.run("""
+                print("📥 Copying related finishes...")
+                try userDb.execute("""
                     INSERT INTO card_related_finishes
                     SELECT * FROM temp_db.card_related_finishes
                 """)
+                let finishCount = try userDb.scalar("SELECT COUNT(*) FROM card_related_finishes") as! Int64
+                print("✅ Inserted \(finishCount) related finishes")
 
                 // Copy related cards
-                try userDb.run("""
+                print("📥 Copying related cards...")
+                try userDb.execute("""
                     INSERT INTO card_related_cards
                     SELECT * FROM temp_db.card_related_cards
                 """)
-
-                // Detach temp database
-                try userDb.execute("DETACH DATABASE temp_db")
+                let relatedCount = try userDb.scalar("SELECT COUNT(*) FROM card_related_cards") as! Int64
+                print("✅ Inserted \(relatedCount) related cards")
 
                 syncMessage = "Merged \(cardsUpdated) cards successfully"
+                print("✅ Data copy complete!")
             }
+
+            // Detach AFTER transaction completes (outside transaction block)
+            // This prevents "database is locked" errors
+            print("📌 Detaching temporary database...")
+            try userDb.execute("DETACH DATABASE temp_db")
+            print("✅ Database detached successfully")
 
             // Transaction succeeded
             print("✅ Database merge complete: \(cardsUpdated) cards updated")
 
-        } catch {
+        } catch let error as NSError {
             // Transaction failed - rollback automatic
+            print("❌ Database merge failed: \(error)")
+            print("❌ Error domain: \(error.domain), code: \(error.code)")
+            print("❌ Error description: \(error.localizedDescription)")
+            if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+                print("❌ Underlying error: \(underlying)")
+            }
             syncMessage = "Merge failed: \(error.localizedDescription)"
             throw error
         }
@@ -278,5 +296,16 @@ class SyncViewModel: ObservableObject {
         if let date = lastSyncDate {
             UserDefaults.standard.set(date, forKey: "lastSyncDate")
         }
+    }
+
+    /// Load database version from UserDefaults
+    private func loadDatabaseVersion() {
+        currentDatabaseVersion = UserDefaults.standard.integer(forKey: "currentDatabaseVersion")
+        // If it's 0 (default), we haven't synced yet
+    }
+
+    /// Save database version to UserDefaults
+    private func saveDatabaseVersion() {
+        UserDefaults.standard.set(currentDatabaseVersion, forKey: "currentDatabaseVersion")
     }
 }

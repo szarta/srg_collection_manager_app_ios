@@ -12,21 +12,31 @@ import SwiftUI
 struct ImageHelper {
 
     /// Get the URL for a card image
-    /// Priority: Documents directory → Server fallback
+    /// Priority: Synced images directory → Documents directory → Server fallback
     static func imageURL(for cardId: String) -> URL? {
         let first2 = String(cardId.prefix(2))
         let imagePath = "images/mobile/\(first2)/\(cardId).webp"
-
-        // Check Documents directory
         let fileManager = FileManager.default
         let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+        // 1. Check synced images directory (from ImageSyncService)
+        let syncedURL = documentsURL
+            .appendingPathComponent("synced_images")
+            .appendingPathComponent(first2)
+            .appendingPathComponent("\(cardId).webp")
+
+        if fileManager.fileExists(atPath: syncedURL.path) {
+            return syncedURL
+        }
+
+        // 2. Check old Documents directory (legacy support)
         let localURL = documentsURL.appendingPathComponent(imagePath)
 
         if fileManager.fileExists(atPath: localURL.path) {
             return localURL
         }
 
-        // Fallback to server
+        // 3. Fallback to server
         return URL(string: "https://get-diced.com/\(imagePath)")
     }
 

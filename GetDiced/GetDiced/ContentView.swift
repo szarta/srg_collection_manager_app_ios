@@ -32,6 +32,13 @@ struct ContentView: View {
             }
 
             NavigationStack {
+                ScanAndImportView()
+            }
+            .tabItem {
+                Label("Scan", systemImage: "qrcode.viewfinder")
+            }
+
+            NavigationStack {
                 SettingsView()
             }
             .tabItem {
@@ -46,6 +53,9 @@ struct ContentView: View {
 struct FoldersView: View {
     @EnvironmentObject var viewModel: CollectionViewModel
     @State private var showAddFolder = false
+    @State private var showRenameFolder = false
+    @State private var renameFolderName = ""
+    @State private var folderToRename: Folder?
 
     var body: some View {
         List {
@@ -64,6 +74,23 @@ struct FoldersView: View {
                     ForEach(customFolders) { folder in
                         NavigationLink(value: folder) {
                             FolderRow(folder: folder)
+                        }
+                        .contextMenu {
+                            Button {
+                                folderToRename = folder
+                                renameFolderName = folder.name
+                                showRenameFolder = true
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+
+                            Button(role: .destructive) {
+                                Task {
+                                    await viewModel.deleteFolder(folder)
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                     }
                     .onDelete(perform: deleteFolder)
@@ -102,6 +129,20 @@ struct FoldersView: View {
             if let error = viewModel.errorMessage {
                 Text(error)
             }
+        }
+        .alert("Rename Folder", isPresented: $showRenameFolder) {
+            TextField("Folder Name", text: $renameFolderName)
+            Button("Cancel", role: .cancel) { }
+            Button("Rename") {
+                if let folder = folderToRename {
+                    Task {
+                        await viewModel.renameFolder(folderId: folder.id, newName: renameFolderName)
+                    }
+                }
+            }
+            .disabled(renameFolderName.isEmpty)
+        } message: {
+            Text("Enter a new name for this folder")
         }
     }
 
@@ -202,6 +243,10 @@ struct FolderDetailView: View {
     @State private var showAddCard = false
     @State private var selectedCard: Card?
     @State private var showEditQuantity = false
+    @State private var showingQRCode = false
+    @State private var showingCSVExport = false
+    @State private var showingCSVImport = false
+    @State private var csvDataToExport: String?
 
     var body: some View {
         Group {
@@ -214,7 +259,7 @@ struct FolderDetailView: View {
         .navigationTitle(folder.name)
         .navigationBarTitleDisplayMode(.large)
         .navigationDestination(for: Card.self) { card in
-            CardDetailView(card: card)
+            CardDetailView(card: card, databaseService: viewModel.databaseService)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -224,6 +269,43 @@ struct FolderDetailView: View {
                     Image(systemName: "plus")
                 }
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button(action: {
+                        Task {
+                            await viewModel.shareFolderAsQRCode(
+                                folderId: folder.id,
+                                folderName: folder.name
+                            )
+                            showingQRCode = true
+                        }
+                    }) {
+                        Label("Share as QR Code", systemImage: "qrcode")
+                    }
+
+                    Button(action: {
+                        Task {
+                            csvDataToExport = await viewModel.exportCollectionToCSV(
+                                folderId: folder.id,
+                                folderName: folder.name
+                            )
+                            if csvDataToExport != nil {
+                                showingCSVExport = true
+                            }
+                        }
+                    }) {
+                        Label("Export to CSV", systemImage: "doc.text")
+                    }
+
+                    Button(action: {
+                        showingCSVImport = true
+                    }) {
+                        Label("Import from CSV", systemImage: "doc.badge.plus")
+                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+            }
         }
         .sheet(isPresented: $showAddCard) {
             AddCardToFolderSheet(folder: folder)
@@ -231,6 +313,76 @@ struct FolderDetailView: View {
         .sheet(isPresented: $showEditQuantity) {
             if let card = selectedCard {
                 EditQuantitySheet(card: card, folder: folder)
+            }
+        }
+        .sheet(isPresented: $showingQRCode) {
+            if let shareUrl = viewModel.shareUrl {
+                QRCodeView(
+                    url: shareUrl,
+                    title: "Share Collection",
+                    onDismiss: {
+                        viewModel.clearShareUrl()
+                        showingQRCode = false
+                    }
+                )
+            } else if viewModel.isSharing {
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("Generating share link...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+            } else if let error = viewModel.errorMessage {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle)
+                        .foregroundColor(.red)
+                    Text(error)
+                        .multilineTextAlignment(.center)
+                    Button("Dismiss") {
+                        showingQRCode = false
+                        viewModel.errorMessage = nil
+                    }
+                }
+                .padding()
+            }
+        }
+        .fileExporter(
+            isPresented: $showingCSVExport,
+            document: CSVDocument(content: csvDataToExport ?? ""),
+            contentType: .commaSeparatedText,
+            defaultFilename: "\(folder.name.replacingOccurrences(of: " ", with: "_"))_collection.csv"
+        ) { result in
+            switch result {
+            case .success:
+                print("CSV exported successfully")
+            case .failure(let error):
+                viewModel.errorMessage = "Failed to export CSV: \(error.localizedDescription)"
+            }
+            csvDataToExport = nil
+        }
+        .fileImporter(
+            isPresented: $showingCSVImport,
+            allowedContentTypes: [.commaSeparatedText],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let files):
+                guard let fileURL = files.first else { return }
+                guard fileURL.startAccessingSecurityScopedResource() else { return }
+                defer { fileURL.stopAccessingSecurityScopedResource() }
+
+                do {
+                    let csvData = try String(contentsOf: fileURL, encoding: .utf8)
+                    Task {
+                        await viewModel.importCollectionFromCSV(csvData: csvData, folderId: folder.id)
+                    }
+                } catch {
+                    viewModel.errorMessage = "Failed to import CSV: \(error.localizedDescription)"
+                }
+            case .failure(let error):
+                viewModel.errorMessage = "Failed to select file: \(error.localizedDescription)"
             }
         }
         .task {
@@ -327,7 +479,7 @@ struct EditQuantitySheet: View {
                 }
 
                 Section {
-                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
+                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
                 } header: {
                     Text("Quantity")
                 }
@@ -401,7 +553,8 @@ struct AddCardToFolderSheet: View {
                                 cardToView = nil
                                 dismiss()
                             }
-                        }
+                        },
+                        databaseService: viewModel.databaseService
                     )
                 }
             }
@@ -458,12 +611,14 @@ struct AddCardToFolderSheet: View {
                 // Show first 50 cards
                 searchResults = try await dbService.searchCards(
                     query: nil,
+                    searchScope: "all",
                     cardType: nil,
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
+                    deckCardNumber: nil,
                     limit: 50
                 )
             } else {
@@ -486,13 +641,14 @@ struct CardDetailWithQuantityView: View {
     let folder: Folder
     let onDismiss: () -> Void
     let onAdd: (Int) -> Void
+    var databaseService: DatabaseService? = nil
 
     @State private var quantity: Int = 1
 
     var body: some View {
         VStack(spacing: 0) {
             // Card detail in scrollable area
-            CardDetailView(card: card, showToolbarLink: false)
+            CardDetailView(card: card, showToolbarLink: false, databaseService: databaseService)
 
             // Quantity picker at bottom (always visible)
             VStack(spacing: 0) {
@@ -504,7 +660,7 @@ struct CardDetailWithQuantityView: View {
 
                     Spacer()
 
-                    Stepper("\(quantity)", value: $quantity, in: 1...99)
+                    Stepper("\(quantity)", value: $quantity, in: 1...999)
                         .labelsHidden()
 
                     Text("\(quantity)")
@@ -539,7 +695,12 @@ struct CardDetailWithQuantityView: View {
 struct CardDetailView: View {
     let card: Card
     var showToolbarLink: Bool = true
+    var databaseService: DatabaseService? = nil
     @Environment(\.dismiss) var dismiss
+
+    @State private var relatedFinishes: [Card] = []
+    @State private var relatedCards: [Card] = []
+    @State private var isLoadingRelationships: Bool = false
 
     var body: some View {
         ScrollView {
@@ -568,6 +729,16 @@ struct CardDetailView: View {
                 // Additional Info
                 additionalInfoSection
 
+                // Related Finishes Section
+                if !relatedFinishes.isEmpty {
+                    relatedFinishesSection
+                }
+
+                // Related Cards Section
+                if !relatedCards.isEmpty {
+                    relatedCardsSection
+                }
+
                 // Web link (when not in toolbar)
                 if !showToolbarLink {
                     webLinkSection
@@ -577,6 +748,9 @@ struct CardDetailView: View {
         }
         .navigationTitle(card.name)
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await loadRelationships()
+        }
         .toolbar {
             if showToolbarLink {
                 ToolbarItem(placement: .primaryAction) {
@@ -793,6 +967,86 @@ struct CardDetailView: View {
         .background(.regularMaterial)
         .cornerRadius(12)
     }
+
+    var relatedFinishesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Related Finishes", systemImage: "sparkles")
+                .font(.headline)
+
+            VStack(spacing: 8) {
+                ForEach(relatedFinishes) { finishCard in
+                    NavigationLink(value: finishCard) {
+                        HStack {
+                            Text(finishCard.name)
+                                .font(.body)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 12)
+                        .background(.regularMaterial)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding()
+        .background(.blue.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    var relatedCardsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Related Cards", systemImage: "link")
+                .font(.headline)
+
+            VStack(spacing: 8) {
+                ForEach(relatedCards) { relatedCard in
+                    NavigationLink(value: relatedCard) {
+                        HStack {
+                            Text(relatedCard.name)
+                                .font(.body)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 12)
+                        .background(.regularMaterial)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding()
+        .background(.green.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    func loadRelationships() async {
+        guard let db = databaseService, !isLoadingRelationships else { return }
+
+        isLoadingRelationships = true
+
+        do {
+            // Load related finishes
+            let finishes = try await db.getRelatedFinishes(for: card.id)
+            relatedFinishes = finishes
+
+            // Load other related cards
+            let related = try await db.getRelatedCards(for: card.id)
+            relatedCards = related
+        } catch {
+            print("Error loading relationships: \(error)")
+        }
+
+        isLoadingRelationships = false
+    }
 }
 
 // MARK: - StatBadge
@@ -988,7 +1242,7 @@ struct CardSearchView: View {
         }
         .navigationTitle("Card Viewer")
         .navigationDestination(for: Card.self) { card in
-            CardDetailView(card: card)
+            CardDetailView(card: card, databaseService: viewModel.databaseService)
         }
         .searchable(text: $viewModel.searchQuery, prompt: "Search cards...")
         .toolbar {
@@ -1093,6 +1347,12 @@ struct ActiveFiltersBar: View {
                 }
 
                 // Active filter chips
+                if viewModel.searchScope != .all {
+                    FilterChip(label: viewModel.searchScope.displayName) {
+                        viewModel.searchScope = .all
+                    }
+                }
+
                 if let cardType = viewModel.selectedCardType {
                     FilterChip(label: cardType) {
                         viewModel.selectedCardType = nil
@@ -1114,6 +1374,12 @@ struct ActiveFiltersBar: View {
                 if let playOrder = viewModel.selectedPlayOrder {
                     FilterChip(label: playOrder) {
                         viewModel.selectedPlayOrder = nil
+                    }
+                }
+
+                if let deckCardNumber = viewModel.selectedDeckCardNumber {
+                    FilterChip(label: "Deck #\(deckCardNumber)") {
+                        viewModel.selectedDeckCardNumber = nil
                     }
                 }
 
@@ -1161,6 +1427,17 @@ struct FiltersMenu: View {
     @ObservedObject var viewModel: CardSearchViewModel
 
     var body: some View {
+        // Search Scope
+        Menu("Search In") {
+            ForEach(SearchScope.allCases, id: \.self) { scope in
+                Button(scope.displayName) {
+                    viewModel.searchScope = scope
+                }
+            }
+        }
+
+        Divider()
+
         // Card Type
         Menu("Card Type") {
             Button("All Types") {
@@ -1217,6 +1494,18 @@ struct FiltersMenu: View {
             }
         }
 
+        // Deck Card Number (1-30)
+        Menu("Deck Card #") {
+            Button("All") {
+                viewModel.selectedDeckCardNumber = nil
+            }
+            ForEach(1...30, id: \.self) { number in
+                Button("\(number)") {
+                    viewModel.selectedDeckCardNumber = number
+                }
+            }
+        }
+
         Divider()
 
         // Banned Toggle
@@ -1259,6 +1548,9 @@ struct DeckFoldersView: View {
     @EnvironmentObject var viewModel: DeckViewModel
     @State private var showAddFolder = false
     @State private var newFolderName = ""
+    @State private var showRenameFolder = false
+    @State private var renameFolderName = ""
+    @State private var folderToRename: DeckFolder?
 
     var defaultFolders: [DeckFolder] {
         viewModel.deckFolders.filter { $0.isDefault }
@@ -1287,6 +1579,23 @@ struct DeckFoldersView: View {
                     ForEach(customFolders) { folder in
                         NavigationLink(value: folder) {
                             DeckFolderRow(folder: folder)
+                        }
+                        .contextMenu {
+                            Button {
+                                folderToRename = folder
+                                renameFolderName = folder.name
+                                showRenameFolder = true
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+
+                            Button(role: .destructive) {
+                                Task {
+                                    await viewModel.deleteDeckFolder(folder)
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                     }
                     .onDelete { indexSet in
@@ -1342,6 +1651,20 @@ struct DeckFoldersView: View {
                     }
                 }
             }
+        }
+        .alert("Rename Folder", isPresented: $showRenameFolder) {
+            TextField("Folder Name", text: $renameFolderName)
+            Button("Cancel", role: .cancel) { }
+            Button("Rename") {
+                if let folder = folderToRename {
+                    Task {
+                        await viewModel.renameDeckFolder(folderId: folder.id, newName: renameFolderName)
+                    }
+                }
+            }
+            .disabled(renameFolderName.isEmpty)
+        } message: {
+            Text("Enter a new name for this folder")
         }
     }
 }
@@ -1466,6 +1789,141 @@ struct DeckRowView: View {
     }
 }
 
+// MARK: - Special Card Slot View (Entrance/Competitor)
+
+struct SpecialCardSlot: View {
+    let title: String
+    let card: Card?
+    let slotType: DeckSlotType
+    let deckId: String
+    let onTapCard: (Card) -> Void
+    let onAddCard: () -> Void
+    let onRemoveCard: () -> Void
+
+    var body: some View {
+        if let card = card {
+            CardRow(card: card)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    onTapCard(card)
+                }
+                .contextMenu {
+                    Button {
+                        onAddCard()
+                    } label: {
+                        Label("Replace Card", systemImage: "arrow.triangle.2.circlepath")
+                    }
+
+                    Button(role: .destructive) {
+                        onRemoveCard()
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                }
+        } else {
+            Button(action: onAddCard) {
+                HStack {
+                    Image(systemName: "plus.circle")
+                    Text("Set \(title)")
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Alternate Card Row View
+
+struct AlternateCardRow: View {
+    let cardDetails: (card: Card, slotNumber: Int)
+    let deckId: String
+    let onTapCard: (Card) -> Void
+    let onRemoveCard: () -> Void
+
+    var body: some View {
+        CardRow(card: cardDetails.card)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onTapCard(cardDetails.card)
+            }
+            .contextMenu {
+                Button(role: .destructive) {
+                    onRemoveCard()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            }
+            .swipeActions {
+                Button(role: .destructive) {
+                    onRemoveCard()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            }
+    }
+}
+
+// MARK: - Deck Slot Row View
+
+struct DeckSlotRow: View {
+    let slotNumber: Int
+    let cardDetails: (card: Card, slotNumber: Int)?
+    let deck: Deck
+    let onTapCard: (Card) -> Void
+    let onAddCard: () -> Void
+    let onRemoveCard: () -> Void
+
+    var isFinishSlot: Bool {
+        slotNumber >= 27
+    }
+
+    var body: some View {
+        if let cardDetails = cardDetails {
+            HStack {
+                Text("\(slotNumber).")
+                    .foregroundColor(isFinishSlot ? .blue : .secondary)
+                    .fontWeight(isFinishSlot ? .semibold : .regular)
+                    .frame(width: 35, alignment: .leading)
+                CardRow(card: cardDetails.card)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onTapCard(cardDetails.card)
+            }
+            .contextMenu {
+                Button {
+                    onAddCard()
+                } label: {
+                    Label("Replace Card", systemImage: "arrow.triangle.2.circlepath")
+                }
+
+                Button(role: .destructive) {
+                    onRemoveCard()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            }
+            .swipeActions {
+                Button(role: .destructive) {
+                    onRemoveCard()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            }
+        } else {
+            Button(action: onAddCard) {
+                HStack {
+                    Text("\(slotNumber).")
+                        .foregroundColor(isFinishSlot ? .blue : .secondary)
+                        .fontWeight(isFinishSlot ? .semibold : .regular)
+                        .frame(width: 35, alignment: .leading)
+                    Text(isFinishSlot ? "Empty Finish Slot" : "Empty Slot")
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Deck Editor View
 
 struct DeckEditorView: View {
@@ -1474,113 +1932,205 @@ struct DeckEditorView: View {
     @State private var showingCardPicker = false
     @State private var selectedSlotType: DeckSlotType = .deck
     @State private var selectedSlotNumber: Int = 1
+    @State private var showingQRCode = false
+    @State private var showingCSVExport = false
+    @State private var csvDataToExport: String?
+    @State private var cardToView: Card?
+    @State private var showingRenameDeck = false
+    @State private var deckName: String = ""
 
-    var body: some View {
+    // Computed property for spectacle type binding
+    private var spectacleTypeBinding: Binding<SpectacleType> {
+        Binding(
+            get: { viewModel.selectedDeck?.spectacleType ?? deck.spectacleType },
+            set: { newType in
+                Task {
+                    await viewModel.updateDeckSpectacleType(deck.id, spectacleType: newType)
+                }
+            }
+        )
+    }
+
+    // QR Code sheet content
+    @ViewBuilder
+    private var qrCodeSheetContent: some View {
+        if let shareUrl = viewModel.shareUrl {
+            QRCodeView(
+                url: shareUrl,
+                title: "Share Deck",
+                onDismiss: {
+                    viewModel.clearShareUrl()
+                    showingQRCode = false
+                }
+            )
+        } else if viewModel.isSharing {
+            VStack(spacing: 16) {
+                ProgressView()
+                Text("Generating share link...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+        } else if let error = viewModel.errorMessage {
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.largeTitle)
+                    .foregroundColor(.red)
+                Text(error)
+                    .multilineTextAlignment(.center)
+                Button("Dismiss") {
+                    showingQRCode = false
+                    viewModel.errorMessage = nil
+                }
+            }
+            .padding()
+        }
+    }
+
+    // Toolbar content
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+                deckName = viewModel.selectedDeck?.name ?? deck.name
+                showingRenameDeck = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+        }
+
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Menu {
+                Button(action: {
+                    Task {
+                        await viewModel.shareDeckAsQRCode(
+                            deckId: deck.id,
+                            deckName: deck.name,
+                            spectacleType: deck.spectacleType
+                        )
+                        showingQRCode = true
+                    }
+                }) {
+                    Label("Share as QR Code", systemImage: "qrcode")
+                }
+
+                Button(action: {
+                    Task {
+                        csvDataToExport = await viewModel.exportDeckToCSV(
+                            deckId: deck.id,
+                            deckName: deck.name
+                        )
+                        if csvDataToExport != nil {
+                            showingCSVExport = true
+                        }
+                    }
+                }) {
+                    Label("Export to CSV", systemImage: "doc.text")
+                }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+        }
+    }
+
+    // Main list content
+    private var listContent: some View {
         List {
             // Spectacle Type
             Section("Spectacle Type") {
-                if let currentDeck = viewModel.selectedDeck {
-                    Picker("Type", selection: Binding(
-                        get: { currentDeck.spectacleType },
-                        set: { newType in
-                            Task {
-                                await viewModel.updateDeckSpectacleType(deck.id, spectacleType: newType)
-                            }
-                        }
-                    )) {
-                        Text("Valiant").tag(SpectacleType.valiant)
-                        Text("Newman").tag(SpectacleType.newman)
-                    }
-                    .pickerStyle(.segmented)
+                Picker("Type", selection: spectacleTypeBinding) {
+                    Text("Valiant").tag(SpectacleType.valiant)
+                    Text("Newman").tag(SpectacleType.newman)
                 }
+                .pickerStyle(.segmented)
             }
 
             // Entrance
             Section("Entrance") {
-                if let entrance = viewModel.entrance {
-                    CardRow(card: entrance)
-                } else {
-                    Button(action: {
+                SpecialCardSlot(
+                    title: "Entrance",
+                    card: viewModel.entrance,
+                    slotType: .entrance,
+                    deckId: deck.id,
+                    onTapCard: { card in
+                        cardToView = card
+                    },
+                    onAddCard: {
                         selectedSlotType = .entrance
                         selectedSlotNumber = 0
                         showingCardPicker = true
-                    }) {
-                        HStack {
-                            Image(systemName: "plus.circle")
-                            Text("Set Entrance")
+                    },
+                    onRemoveCard: {
+                        Task {
+                            await viewModel.removeCard(from: deck.id, slotType: .entrance, slotNumber: 0)
                         }
                     }
-                }
+                )
             }
 
             // Competitor
             Section("Competitor") {
-                if let competitor = viewModel.competitor {
-                    CardRow(card: competitor)
-                } else {
-                    Button(action: {
+                SpecialCardSlot(
+                    title: "Competitor",
+                    card: viewModel.competitor,
+                    slotType: .competitor,
+                    deckId: deck.id,
+                    onTapCard: { card in
+                        cardToView = card
+                    },
+                    onAddCard: {
                         selectedSlotType = .competitor
                         selectedSlotNumber = 0
                         showingCardPicker = true
-                    }) {
-                        HStack {
-                            Image(systemName: "plus.circle")
-                            Text("Set Competitor")
+                    },
+                    onRemoveCard: {
+                        Task {
+                            await viewModel.removeCard(from: deck.id, slotType: .competitor, slotNumber: 0)
                         }
                     }
-                }
+                )
             }
 
-            // Main Deck (30 cards)
+            // Main Deck (30 cards, slots 27-30 typically for finishes)
             Section("Main Deck (\(viewModel.mainDeckCards.count)/30)") {
                 ForEach(1...30, id: \.self) { slotNum in
-                    if let cardDetails = viewModel.mainDeckCards.first(where: { $0.slotNumber == slotNum }) {
-                        HStack {
-                            Text("\(slotNum).")
-                                .foregroundColor(.secondary)
-                                .frame(width: 30, alignment: .leading)
-                            CardRow(card: cardDetails.card)
-                        }
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                Task {
-                                    await viewModel.removeCard(from: deck.id, slotType: .deck, slotNumber: slotNum)
-                                }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    } else {
-                        Button(action: {
+                    let details = viewModel.mainDeckCards.first(where: { $0.slotNumber == slotNum })
+                    DeckSlotRow(
+                        slotNumber: slotNum,
+                        cardDetails: details.map { (card: $0.card, slotNumber: $0.slotNumber) },
+                        deck: deck,
+                        onTapCard: { card in
+                            cardToView = card
+                        },
+                        onAddCard: {
                             selectedSlotType = .deck
                             selectedSlotNumber = slotNum
                             showingCardPicker = true
-                        }) {
-                            HStack {
-                                Text("\(slotNum).")
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 30, alignment: .leading)
-                                Text("Empty Slot")
-                                    .foregroundColor(.secondary)
+                        },
+                        onRemoveCard: {
+                            Task {
+                                await viewModel.removeCard(from: deck.id, slotType: .deck, slotNumber: slotNum)
                             }
                         }
-                    }
+                    )
                 }
             }
 
             // Alternates
             Section("Alternates (\(viewModel.alternateCards.count))") {
                 ForEach(viewModel.alternateCards) { cardDetails in
-                    CardRow(card: cardDetails.card)
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                Task {
-                                    await viewModel.removeCard(from: deck.id, slotType: .alternate, slotNumber: cardDetails.slotNumber)
-                                }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                    AlternateCardRow(
+                        cardDetails: (card: cardDetails.card, slotNumber: cardDetails.slotNumber),
+                        deckId: deck.id,
+                        onTapCard: { card in
+                            cardToView = card
+                        },
+                        onRemoveCard: {
+                            Task {
+                                await viewModel.removeCard(from: deck.id, slotType: .alternate, slotNumber: cardDetails.slotNumber)
                             }
                         }
+                    )
                 }
                 Button(action: {
                     selectedSlotType = .alternate
@@ -1593,19 +2143,99 @@ struct DeckEditorView: View {
                 }
             }
         }
-        .navigationTitle(deck.name)
-        .task {
-            viewModel.selectedDeck = deck
-            await viewModel.loadDeckCards(deck.id)
+    }
+
+    var body: some View {
+        listContent
+            .navigationTitle(viewModel.selectedDeck?.name ?? deck.name)
+            .onAppear {
+                deckName = viewModel.selectedDeck?.name ?? deck.name
+            }
+            .toolbar {
+                toolbarContent
+            }
+            .task {
+                viewModel.selectedDeck = deck
+                await viewModel.loadDeckCards(deck.id)
+            }
+            .onChange(of: viewModel.selectedDeck?.name) { newName in
+                if let newName = newName {
+                    deckName = newName
+                }
+            }
+            .sheet(isPresented: $showingCardPicker) {
+                AddCardToDeckSheet(
+                    deckId: deck.id,
+                    folderId: deck.folderId,
+                    slotType: selectedSlotType,
+                    slotNumber: selectedSlotNumber
+                )
+            }
+            .sheet(isPresented: $showingQRCode) {
+                qrCodeSheetContent
+            }
+            .fileExporter(
+                isPresented: $showingCSVExport,
+                document: CSVDocument(content: csvDataToExport ?? ""),
+                contentType: .commaSeparatedText,
+                defaultFilename: "\(deck.name.replacingOccurrences(of: " ", with: "_"))_deck.csv"
+            ) { result in
+                switch result {
+                case .success:
+                    print("CSV exported successfully")
+                case .failure(let error):
+                    viewModel.errorMessage = "Failed to export CSV: \(error.localizedDescription)"
+                }
+                csvDataToExport = nil
+            }
+            .sheet(item: $cardToView) { card in
+                NavigationStack {
+                    CardDetailView(card: card, databaseService: viewModel.databaseService)
+                        .navigationDestination(for: Card.self) { destinationCard in
+                            CardDetailView(card: destinationCard, databaseService: viewModel.databaseService)
+                        }
+                }
+            }
+            .alert("Rename Deck", isPresented: $showingRenameDeck) {
+                TextField("Deck Name", text: $deckName)
+                Button("Cancel", role: .cancel) { }
+                Button("Rename") {
+                    Task {
+                        await viewModel.renameDeck(deckId: deck.id, newName: deckName)
+                    }
+                }
+                .disabled(deckName.isEmpty)
+            } message: {
+                Text("Enter a new name for this deck")
+            }
+    }
+}
+
+// MARK: - CSV Document for File Export
+
+import UniformTypeIdentifiers
+
+struct CSVDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.commaSeparatedText] }
+
+    var content: String
+
+    init(content: String) {
+        self.content = content
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+              let string = String(data: data, encoding: .utf8)
+        else {
+            throw CocoaError(.fileReadCorruptFile)
         }
-        .sheet(isPresented: $showingCardPicker) {
-            AddCardToDeckSheet(
-                deckId: deck.id,
-                folderId: deck.folderId,
-                slotType: selectedSlotType,
-                slotNumber: selectedSlotNumber
-            )
-        }
+        content = string
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let data = content.data(using: .utf8)!
+        return .init(regularFileWithContents: data)
     }
 }
 
@@ -1652,8 +2282,7 @@ struct AddCardToDeckSheet: View {
                                 case .deck:
                                     await viewModel.setDeckCard(card, in: deckId, slotNumber: slotNumber)
                                 case .finish:
-                                    // Finishes not used - cards 28-30 are finish cards in deck
-                                    break
+                                    await viewModel.addFinish(card, to: deckId)
                                 case .alternate:
                                     await viewModel.addAlternate(card, to: deckId)
                                 }
@@ -1695,12 +2324,14 @@ struct AddCardToDeckSheet: View {
                 // Only EntranceCard type
                 availableCards = try await dbService.searchCards(
                     query: nil,
+                    searchScope: "all",
                     cardType: "EntranceCard",
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
+                    deckCardNumber: nil,
                     limit: 1000
                 )
 
@@ -1716,21 +2347,23 @@ struct AddCardToDeckSheet: View {
                     cardType = "TrioCompetitorCard"
                 default:
                     // Tag or custom folders - load all competitor types
-                    let singles = try await dbService.searchCards(query: nil, cardType: "SingleCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, limit: 1000)
-                    let tornado = try await dbService.searchCards(query: nil, cardType: "TornadoCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, limit: 1000)
-                    let trios = try await dbService.searchCards(query: nil, cardType: "TrioCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, limit: 1000)
+                    let singles = try await dbService.searchCards(query: nil, searchScope: "all", cardType: "SingleCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumber: nil, limit: 1000)
+                    let tornado = try await dbService.searchCards(query: nil, searchScope: "all", cardType: "TornadoCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumber: nil, limit: 1000)
+                    let trios = try await dbService.searchCards(query: nil, searchScope: "all", cardType: "TrioCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumber: nil, limit: 1000)
                     availableCards = (singles + tornado + trios).sorted { $0.name < $1.name }
                     isSearching = false
                     return
                 }
                 availableCards = try await dbService.searchCards(
                     query: nil,
+                    searchScope: "all",
                     cardType: cardType,
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
+                    deckCardNumber: nil,
                     limit: 1000
                 )
 
@@ -1738,30 +2371,45 @@ struct AddCardToDeckSheet: View {
                 // Only MainDeckCard type with matching deck_card_number
                 let allMainDeck = try await dbService.searchCards(
                     query: nil,
+                    searchScope: "all",
                     cardType: "MainDeckCard",
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
+                    deckCardNumber: nil,
                     limit: 1000
                 )
                 availableCards = allMainDeck.filter { $0.deckCardNumber == slotNumber }
 
             case .finish:
-                // Finishes not used - cards 28-30 are finish cards in deck
-                availableCards = []
+                // Only MainDeckCard type with play_order = "Finish"
+                availableCards = try await dbService.searchCards(
+                    query: nil,
+                    searchScope: "all",
+                    cardType: "MainDeckCard",
+                    atkType: nil,
+                    playOrder: "Finish",
+                    division: nil,
+                    releaseSet: nil,
+                    isBanned: nil,
+                    deckCardNumber: nil,
+                    limit: 1000
+                )
 
             case .alternate:
                 // Any card type
                 availableCards = try await dbService.searchCards(
                     query: nil,
+                    searchScope: "all",
                     cardType: nil,
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
+                    deckCardNumber: nil,
                     limit: 1000
                 )
             }

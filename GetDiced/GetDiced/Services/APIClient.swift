@@ -104,20 +104,31 @@ class APIClient {
 
     // MARK: - Shared List Endpoints (Deck Sharing)
 
-    /// Create a shared list (for deck sharing)
+    /// Create a shared list (for deck or collection sharing)
     /// POST /api/shared-lists
     func createSharedList(
         name: String?,
         description: String?,
-        cardUuids: [String]
+        cardUuids: [String],
+        listType: String = "COLLECTION",
+        deckData: DeckData? = nil
     ) async throws -> SharedListCreateResponse {
         let url = URL(string: "\(baseURL)/api/shared-lists")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let requestBody = SharedListRequest(name: name, description: description, cardUuids: cardUuids)
-        request.httpBody = try JSONEncoder().encode(requestBody)
+        let requestBody = SharedListRequest(
+            name: name,
+            description: description,
+            cardUuids: cardUuids,
+            listType: listType,
+            deckData: deckData
+        )
+
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        request.httpBody = try encoder.encode(requestBody)
 
         let (data, response) = try await session.data(for: request)
         try validateResponse(response)
@@ -172,10 +183,10 @@ class APIClient {
     }
 
     /// Download cards database file
-    /// GET /api/cards/{filename}
+    /// GET /api/cards/database
     /// Returns: Raw Data for the .db file
     func downloadCardsDatabase(filename: String) async throws -> Data {
-        let url = URL(string: "\(baseURL)/api/cards/\(filename)")!
+        let url = URL(string: "\(baseURL)/api/cards/database")!
 
         let (data, response) = try await session.data(from: url)
         try validateResponse(response)

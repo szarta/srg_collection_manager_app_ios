@@ -244,23 +244,60 @@ class DatabaseService {
     /// Search cards with advanced filters
     func searchCards(
         query: String?,
+        searchScope: String = "all",
         cardType: String?,
         atkType: String?,
         playOrder: String?,
         division: String?,
         releaseSet: String?,
         isBanned: Bool?,
+        deckCardNumber: Int?,
+        inCollectionFolderId: String? = nil,
         limit: Int = 100
     ) async throws -> [Card] {
         guard let db = db else { throw DatabaseError.notConnected }
 
+        // If filtering by folder, use a JOIN query
+        if let folderId = inCollectionFolderId {
+            return try await searchCardsInFolder(
+                folderId: folderId,
+                query: query,
+                searchScope: searchScope,
+                cardType: cardType,
+                atkType: atkType,
+                playOrder: playOrder,
+                division: division,
+                releaseSet: releaseSet,
+                isBanned: isBanned,
+                deckCardNumber: deckCardNumber,
+                limit: limit
+            )
+        }
+
         var searchQuery = cards.order(card_name).limit(limit)
 
-        // Name/rules text search
+        // Search with scope
         if let query = query, !query.isEmpty {
-            let nameMatch = card_name.like("%\(query)%", escape: nil)
-            let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
-            searchQuery = searchQuery.filter(nameMatch || rulesMatch)
+            switch searchScope {
+            case "name":
+                // Search only in name field
+                let nameMatch = card_name.like("%\(query)%", escape: nil)
+                searchQuery = searchQuery.filter(nameMatch)
+            case "rules":
+                // Search only in rules_text field
+                let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
+                searchQuery = searchQuery.filter(rulesMatch)
+            case "tags":
+                // Search only in tags field
+                let tagsMatch = card_tags.like("%\(query)%", escape: nil)
+                searchQuery = searchQuery.filter(tagsMatch)
+            default: // "all"
+                // Search in name, rules_text, and tags
+                let nameMatch = card_name.like("%\(query)%", escape: nil)
+                let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
+                let tagsMatch = card_tags.like("%\(query)%", escape: nil)
+                searchQuery = searchQuery.filter(nameMatch || rulesMatch || tagsMatch)
+            }
         }
 
         // Card type filter
@@ -293,7 +330,98 @@ class DatabaseService {
             searchQuery = searchQuery.filter(card_isBanned == isBanned)
         }
 
+        // Deck card number filter
+        if let deckCardNumber = deckCardNumber {
+            searchQuery = searchQuery.filter(card_deckCardNumber == deckCardNumber)
+        }
+
         // Execute
+        var results: [Card] = []
+        for row in try db.prepare(searchQuery) {
+            results.append(try parseCard(from: row))
+        }
+        return results
+    }
+
+    /// Search cards within a specific collection folder
+    private func searchCardsInFolder(
+        folderId: String,
+        query: String?,
+        searchScope: String,
+        cardType: String?,
+        atkType: String?,
+        playOrder: String?,
+        division: String?,
+        releaseSet: String?,
+        isBanned: Bool?,
+        deckCardNumber: Int?,
+        limit: Int
+    ) async throws -> [Card] {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        // First, get all card UUIDs in this folder
+        let folderCardsTable = Table("folder_cards")
+        let fc_cardUuid = Expression<String>("card_uuid")
+        let fc_folderId = Expression<String>("folder_id")
+
+        let cardUuidsQuery = folderCardsTable
+            .select(fc_cardUuid)
+            .filter(fc_folderId == folderId)
+
+        var cardUuidsInFolder: [String] = []
+        for row in try db.prepare(cardUuidsQuery) {
+            cardUuidsInFolder.append(row[fc_cardUuid])
+        }
+
+        // If folder is empty, return empty results
+        if cardUuidsInFolder.isEmpty {
+            return []
+        }
+
+        // Build search query with folder filter
+        var searchQuery = cards.filter(cardUuidsInFolder.contains(card_dbUuid)).order(card_name).limit(limit)
+
+        // Add search scope filtering
+        if let query = query, !query.isEmpty {
+            switch searchScope {
+            case "name":
+                searchQuery = searchQuery.filter(card_name.like("%\(query)%", escape: nil))
+            case "rules":
+                searchQuery = searchQuery.filter(card_rulesText.like("%\(query)%", escape: nil))
+            case "tags":
+                searchQuery = searchQuery.filter(card_tags.like("%\(query)%", escape: nil))
+            default: // "all"
+                let nameMatch = card_name.like("%\(query)%", escape: nil)
+                let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
+                let tagsMatch = card_tags.like("%\(query)%", escape: nil)
+                searchQuery = searchQuery.filter(nameMatch || rulesMatch || tagsMatch)
+            }
+        }
+
+        // Add other filters
+        if let cardType = cardType {
+            searchQuery = searchQuery.filter(card_cardType == cardType)
+        }
+        if let atkType = atkType {
+            searchQuery = searchQuery.filter(card_atkType == atkType)
+        }
+        if let playOrder = playOrder {
+            searchQuery = searchQuery.filter(card_playOrder == playOrder)
+        }
+        if let division = division {
+            searchQuery = searchQuery.filter(card_division == division)
+        }
+        if let releaseSet = releaseSet {
+            searchQuery = searchQuery.filter(card_releaseSet == releaseSet)
+        }
+        if let isBanned = isBanned {
+            searchQuery = searchQuery.filter(card_isBanned == isBanned)
+        }
+        if let deckCardNumber = deckCardNumber {
+            searchQuery = searchQuery.filter(card_deckCardNumber == deckCardNumber)
+        }
+
+        // Execute query
         var results: [Card] = []
         for row in try db.prepare(searchQuery) {
             results.append(try parseCard(from: row))
@@ -393,6 +521,14 @@ class DatabaseService {
 
         let folder = folders.filter(folder_id == folderId)
         try db.run(folder.delete())
+    }
+
+    /// Update folder name
+    func updateFolderName(_ folderId: String, name: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let row = folders.filter(folder_id == folderId)
+        try db.run(row.update(folder_name <- name))
     }
 
     // MARK: - Folder-Card Relationship Queries
@@ -525,6 +661,14 @@ class DatabaseService {
         try db.run(row.delete())
     }
 
+    /// Update deck folder name
+    func updateDeckFolderName(_ folderId: String, name: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let row = deckFolders.filter(df_id == folderId)
+        try db.run(row.update(df_name <- name))
+    }
+
     /// Ensure default deck folders exist
     func ensureDefaultDeckFolders() async throws {
         let defaultFolders = [
@@ -618,6 +762,18 @@ class DatabaseService {
         let row = decks.filter(deck_id == deckId)
         try db.run(row.update(
             deck_spectacleType <- spectacleType.rawValue,
+            deck_modifiedAt <- now
+        ))
+    }
+
+    /// Update deck name
+    func updateDeckName(_ deckId: String, name: String) async throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let row = decks.filter(deck_id == deckId)
+        try db.run(row.update(
+            deck_name <- name,
             deck_modifiedAt <- now
         ))
     }
@@ -916,6 +1072,56 @@ class DatabaseService {
             createdAt: row[deck_createdAt],
             modifiedAt: row[deck_modifiedAt]
         )
+    }
+
+    // MARK: - Card Relationships
+
+    /// Get related finish cards for a card
+    func getRelatedFinishes(for cardUuid: String) async throws -> [Card] {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let relatedFinishes = Table("card_related_finishes")
+        let rf_cardUuid = Expression<String>("card_uuid")
+        let rf_finishUuid = Expression<String>("finish_uuid")
+
+        // Query: SELECT cards.* FROM cards
+        //        JOIN card_related_finishes ON cards.db_uuid = card_related_finishes.finish_uuid
+        //        WHERE card_related_finishes.card_uuid = ?
+        let query = cards
+            .join(relatedFinishes, on: card_dbUuid == rf_finishUuid)
+            .filter(rf_cardUuid == cardUuid)
+            .order(card_name)
+
+        var results: [Card] = []
+        for row in try db.prepare(query) {
+            results.append(try parseCard(from: row))
+        }
+
+        return results
+    }
+
+    /// Get related cards for a card (other relationships)
+    func getRelatedCards(for cardUuid: String) async throws -> [Card] {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        let relatedCards = Table("card_related_cards")
+        let rc_cardUuid = Expression<String>("card_uuid")
+        let rc_relatedUuid = Expression<String>("related_uuid")
+
+        // Query: SELECT cards.* FROM cards
+        //        JOIN card_related_cards ON cards.db_uuid = card_related_cards.related_uuid
+        //        WHERE card_related_cards.card_uuid = ?
+        let query = cards
+            .join(relatedCards, on: card_dbUuid == rc_relatedUuid)
+            .filter(rc_cardUuid == cardUuid)
+            .order(card_name)
+
+        var results: [Card] = []
+        for row in try db.prepare(query) {
+            results.append(try parseCard(from: row))
+        }
+
+        return results
     }
 }
 

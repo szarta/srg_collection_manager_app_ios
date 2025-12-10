@@ -8,6 +8,23 @@
 import Foundation
 import Combine
 
+/// Search scope options
+enum SearchScope: String, CaseIterable {
+    case all = "all"
+    case name = "name"
+    case rules = "rules"
+    case tags = "tags"
+
+    var displayName: String {
+        switch self {
+        case .all: return "All Fields"
+        case .name: return "Name"
+        case .rules: return "Rules"
+        case .tags: return "Tags"
+        }
+    }
+}
+
 @MainActor
 class CardSearchViewModel: ObservableObject {
 
@@ -19,12 +36,14 @@ class CardSearchViewModel: ObservableObject {
 
     // Search & Filters
     @Published var searchQuery: String = ""
+    @Published var searchScope: SearchScope = .all
     @Published var selectedCardType: String?
     @Published var selectedAtkType: String?
     @Published var selectedPlayOrder: String?
     @Published var selectedDivision: String?
     @Published var selectedReleaseSet: String?
     @Published var showBannedOnly: Bool = false
+    @Published var selectedDeckCardNumber: Int?
 
     // Filter Options (loaded from database)
     @Published var availableCardTypes: [String] = []
@@ -72,11 +91,18 @@ class CardSearchViewModel: ObservableObject {
             .store(in: &cancellables)
 
         // Also trigger search when filters change
-        Publishers.CombineLatest4(
-            $selectedCardType,
-            $selectedDivision,
-            $selectedAtkType,
-            $selectedPlayOrder
+        Publishers.CombineLatest(
+            Publishers.CombineLatest4(
+                $selectedCardType,
+                $selectedDivision,
+                $selectedAtkType,
+                $selectedPlayOrder
+            ),
+            Publishers.CombineLatest3(
+                $searchScope,
+                $selectedDeckCardNumber,
+                $selectedReleaseSet
+            )
         )
         .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
         .sink { [weak self] _ in
@@ -113,12 +139,14 @@ class CardSearchViewModel: ObservableObject {
 
             cards = try await databaseService.searchCards(
                 query: query,
+                searchScope: searchScope.rawValue,
                 cardType: selectedCardType,
                 atkType: selectedAtkType,
                 playOrder: selectedPlayOrder,
                 division: selectedDivision,
                 releaseSet: selectedReleaseSet,
                 isBanned: bannedFilter,
+                deckCardNumber: selectedDeckCardNumber,
                 limit: 200  // Show more cards in viewer
             )
         } catch {
@@ -139,22 +167,26 @@ class CardSearchViewModel: ObservableObject {
     /// Clear all filters
     func clearFilters() {
         searchQuery = ""
+        searchScope = .all
         selectedCardType = nil
         selectedAtkType = nil
         selectedPlayOrder = nil
         selectedDivision = nil
         selectedReleaseSet = nil
+        selectedDeckCardNumber = nil
         showBannedOnly = false
     }
 
     /// Check if any filters are active
     var hasActiveFilters: Bool {
         return !searchQuery.isEmpty ||
+               searchScope != .all ||
                selectedCardType != nil ||
                selectedAtkType != nil ||
                selectedPlayOrder != nil ||
                selectedDivision != nil ||
                selectedReleaseSet != nil ||
+               selectedDeckCardNumber != nil ||
                showBannedOnly
     }
 }
