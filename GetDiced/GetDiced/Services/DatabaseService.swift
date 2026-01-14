@@ -244,14 +244,20 @@ class DatabaseService {
     /// Search cards with advanced filters
     func searchCards(
         query: String?,
-        searchScope: String = "all",
+        searchScopes: Set<SearchScope>,
         cardType: String?,
         atkType: String?,
         playOrder: String?,
         division: String?,
         releaseSet: String?,
         isBanned: Bool?,
-        deckCardNumber: Int?,
+        deckCardNumbers: Set<Int>,
+        minPower: Int = 5,
+        minTechnique: Int = 5,
+        minAgility: Int = 5,
+        minStrike: Int = 5,
+        minSubmission: Int = 5,
+        minGrapple: Int = 5,
         inCollectionFolderId: String? = nil,
         limit: Int = 100
     ) async throws -> [Card] {
@@ -262,41 +268,53 @@ class DatabaseService {
             return try await searchCardsInFolder(
                 folderId: folderId,
                 query: query,
-                searchScope: searchScope,
+                searchScopes: searchScopes,
                 cardType: cardType,
                 atkType: atkType,
                 playOrder: playOrder,
                 division: division,
                 releaseSet: releaseSet,
                 isBanned: isBanned,
-                deckCardNumber: deckCardNumber,
+                deckCardNumbers: deckCardNumbers,
+                minPower: minPower,
+                minTechnique: minTechnique,
+                minAgility: minAgility,
+                minStrike: minStrike,
+                minSubmission: minSubmission,
+                minGrapple: minGrapple,
                 limit: limit
             )
         }
 
         var searchQuery = cards.order(card_name).limit(limit)
 
-        // Search with scope
+        // Multi-select search scopes
         if let query = query, !query.isEmpty {
-            switch searchScope {
-            case "name":
-                // Search only in name field
-                let nameMatch = card_name.like("%\(query)%", escape: nil)
-                searchQuery = searchQuery.filter(nameMatch)
-            case "rules":
-                // Search only in rules_text field
-                let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
-                searchQuery = searchQuery.filter(rulesMatch)
-            case "tags":
-                // Search only in tags field
-                let tagsMatch = card_tags.like("%\(query)%", escape: nil)
-                searchQuery = searchQuery.filter(tagsMatch)
-            default: // "all"
-                // Search in name, rules_text, and tags
-                let nameMatch = card_name.like("%\(query)%", escape: nil)
-                let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
-                let tagsMatch = card_tags.like("%\(query)%", escape: nil)
-                searchQuery = searchQuery.filter(nameMatch || rulesMatch || tagsMatch)
+            let nameMatch = card_name.like("%\(query)%", escape: nil)
+            let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
+            let tagsMatch = card_tags.like("%\(query)%", escape: nil)
+
+            var scopeConditions: [SQLite.Expression<Bool>] = []
+
+            if searchScopes.contains(.name) {
+                scopeConditions.append(nameMatch)
+            }
+            if searchScopes.contains(.rules) {
+                // Handle nullable field - use coalesce to treat null as non-matching
+                scopeConditions.append(rulesMatch ?? false)
+            }
+            if searchScopes.contains(.tags) {
+                // Handle nullable field - use coalesce to treat null as non-matching
+                scopeConditions.append(tagsMatch ?? false)
+            }
+
+            // If no scopes selected, search all (fallback)
+            if scopeConditions.isEmpty {
+                searchQuery = searchQuery.filter(nameMatch || (rulesMatch ?? false) || (tagsMatch ?? false))
+            } else {
+                // Combine all scope conditions with OR
+                let combined = scopeConditions.dropFirst().reduce(scopeConditions[0]) { $0 || $1 }
+                searchQuery = searchQuery.filter(combined)
             }
         }
 
@@ -330,9 +348,30 @@ class DatabaseService {
             searchQuery = searchQuery.filter(card_isBanned == isBanned)
         }
 
-        // Deck card number filter
-        if let deckCardNumber = deckCardNumber {
-            searchQuery = searchQuery.filter(card_deckCardNumber == deckCardNumber)
+        // Multi-select deck card numbers filter
+        if !deckCardNumbers.isEmpty {
+            let deckNumbersArray = Array(deckCardNumbers)
+            searchQuery = searchQuery.filter(deckNumbersArray.contains(card_deckCardNumber))
+        }
+
+        // Stat filters (only match cards with actual stat values >= minimum)
+        if minPower > 5 {
+            searchQuery = searchQuery.filter(card_power >= minPower)
+        }
+        if minTechnique > 5 {
+            searchQuery = searchQuery.filter(card_technique >= minTechnique)
+        }
+        if minAgility > 5 {
+            searchQuery = searchQuery.filter(card_agility >= minAgility)
+        }
+        if minStrike > 5 {
+            searchQuery = searchQuery.filter(card_strike >= minStrike)
+        }
+        if minSubmission > 5 {
+            searchQuery = searchQuery.filter(card_submission >= minSubmission)
+        }
+        if minGrapple > 5 {
+            searchQuery = searchQuery.filter(card_grapple >= minGrapple)
         }
 
         // Execute
@@ -347,14 +386,20 @@ class DatabaseService {
     private func searchCardsInFolder(
         folderId: String,
         query: String?,
-        searchScope: String,
+        searchScopes: Set<SearchScope>,
         cardType: String?,
         atkType: String?,
         playOrder: String?,
         division: String?,
         releaseSet: String?,
         isBanned: Bool?,
-        deckCardNumber: Int?,
+        deckCardNumbers: Set<Int>,
+        minPower: Int,
+        minTechnique: Int,
+        minAgility: Int,
+        minStrike: Int,
+        minSubmission: Int,
+        minGrapple: Int,
         limit: Int
     ) async throws -> [Card] {
         guard let db = db else { throw DatabaseError.notConnected }
@@ -381,20 +426,33 @@ class DatabaseService {
         // Build search query with folder filter
         var searchQuery = cards.filter(cardUuidsInFolder.contains(card_dbUuid)).order(card_name).limit(limit)
 
-        // Add search scope filtering
+        // Multi-select search scopes
         if let query = query, !query.isEmpty {
-            switch searchScope {
-            case "name":
-                searchQuery = searchQuery.filter(card_name.like("%\(query)%", escape: nil))
-            case "rules":
-                searchQuery = searchQuery.filter(card_rulesText.like("%\(query)%", escape: nil))
-            case "tags":
-                searchQuery = searchQuery.filter(card_tags.like("%\(query)%", escape: nil))
-            default: // "all"
-                let nameMatch = card_name.like("%\(query)%", escape: nil)
-                let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
-                let tagsMatch = card_tags.like("%\(query)%", escape: nil)
-                searchQuery = searchQuery.filter(nameMatch || rulesMatch || tagsMatch)
+            let nameMatch = card_name.like("%\(query)%", escape: nil)
+            let rulesMatch = card_rulesText.like("%\(query)%", escape: nil)
+            let tagsMatch = card_tags.like("%\(query)%", escape: nil)
+
+            var scopeConditions: [SQLite.Expression<Bool>] = []
+
+            if searchScopes.contains(.name) {
+                scopeConditions.append(nameMatch)
+            }
+            if searchScopes.contains(.rules) {
+                // Handle nullable field - use coalesce to treat null as non-matching
+                scopeConditions.append(rulesMatch ?? false)
+            }
+            if searchScopes.contains(.tags) {
+                // Handle nullable field - use coalesce to treat null as non-matching
+                scopeConditions.append(tagsMatch ?? false)
+            }
+
+            // If no scopes selected, search all (fallback)
+            if scopeConditions.isEmpty {
+                searchQuery = searchQuery.filter(nameMatch || (rulesMatch ?? false) || (tagsMatch ?? false))
+            } else {
+                // Combine all scope conditions with OR
+                let combined = scopeConditions.dropFirst().reduce(scopeConditions[0]) { $0 || $1 }
+                searchQuery = searchQuery.filter(combined)
             }
         }
 
@@ -417,8 +475,31 @@ class DatabaseService {
         if let isBanned = isBanned {
             searchQuery = searchQuery.filter(card_isBanned == isBanned)
         }
-        if let deckCardNumber = deckCardNumber {
-            searchQuery = searchQuery.filter(card_deckCardNumber == deckCardNumber)
+
+        // Multi-select deck card numbers filter
+        if !deckCardNumbers.isEmpty {
+            let deckNumbersArray = Array(deckCardNumbers)
+            searchQuery = searchQuery.filter(deckNumbersArray.contains(card_deckCardNumber))
+        }
+
+        // Stat filters (only match cards with actual stat values >= minimum)
+        if minPower > 5 {
+            searchQuery = searchQuery.filter(card_power >= minPower)
+        }
+        if minTechnique > 5 {
+            searchQuery = searchQuery.filter(card_technique >= minTechnique)
+        }
+        if minAgility > 5 {
+            searchQuery = searchQuery.filter(card_agility >= minAgility)
+        }
+        if minStrike > 5 {
+            searchQuery = searchQuery.filter(card_strike >= minStrike)
+        }
+        if minSubmission > 5 {
+            searchQuery = searchQuery.filter(card_submission >= minSubmission)
+        }
+        if minGrapple > 5 {
+            searchQuery = searchQuery.filter(card_grapple >= minGrapple)
         }
 
         // Execute query

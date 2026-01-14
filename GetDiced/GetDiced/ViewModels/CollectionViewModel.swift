@@ -344,14 +344,14 @@ class CollectionViewModel: ObservableObject {
                     // Find card by name
                     let cards = try await databaseService.searchCards(
                         query: cardName,
-                        searchScope: "name",
+                        searchScopes: [.name],
                         cardType: nil,
                         atkType: nil,
                         playOrder: nil,
                         division: nil,
                         releaseSet: nil,
                         isBanned: nil,
-                        deckCardNumber: nil,
+                        deckCardNumbers: [],
                         limit: 10
                     )
 

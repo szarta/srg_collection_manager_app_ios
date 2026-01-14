@@ -23,11 +23,16 @@ class SyncViewModel: ObservableObject {
     // Manifest info
     @Published var currentDatabaseVersion: Int = 0
     @Published var latestDatabaseVersion: Int?
+    @Published var currentDatabaseHash: String = ""
+    @Published var latestDatabaseHash: String?
     @Published var updateAvailable: Bool = false
 
     // Image sync
     @Published var totalImages: Int = 0
     @Published var downloadedImages: Int = 0
+
+    // Card count
+    @Published var totalCards: Int = 0
 
     // MARK: - Dependencies
 
@@ -42,25 +47,41 @@ class SyncViewModel: ObservableObject {
         self.apiClient = apiClient
         self.loadLastSyncDate()
         self.loadDatabaseVersion()
+        self.loadDatabaseHash()
+        Task {
+            await self.loadCardCount()
+        }
     }
 
     // MARK: - Sync Operations
 
-    /// Check if database update is available
+    /// Check if database update is available (using hash comparison like Android)
     func checkForUpdates() async {
+        isSyncing = true
+        syncMessage = "Checking for updates..."
+        errorMessage = nil
+
         do {
             let manifest = try await apiClient.getCardsManifest()
+
             latestDatabaseVersion = manifest.version
-            updateAvailable = manifest.version > currentDatabaseVersion
+            latestDatabaseHash = manifest.hash
+
+            // Use hash comparison like Android (more reliable than version)
+            let hashChanged = currentDatabaseHash.isEmpty || currentDatabaseHash != manifest.hash
+            updateAvailable = hashChanged
 
             if updateAvailable {
-                syncMessage = "Update available: v\(manifest.version) (Current: v\(currentDatabaseVersion))"
+                syncMessage = "Update available: \(manifest.cardCount) cards (Current: \(totalCards))"
             } else {
-                syncMessage = "Database is up to date (v\(currentDatabaseVersion))"
+                syncMessage = "Database is up to date (\(manifest.cardCount) cards)"
             }
         } catch {
             errorMessage = "Failed to check for updates: \(error.localizedDescription)"
+            syncMessage = ""
         }
+
+        isSyncing = false
     }
 
     /// Sync database from server
@@ -75,9 +96,9 @@ class SyncViewModel: ObservableObject {
             syncProgress = 0.1
             let manifest = try await apiClient.getCardsManifest()
 
-            // Check if update needed
-            if manifest.version <= currentDatabaseVersion {
-                syncMessage = "Database is up to date (v\(currentDatabaseVersion))"
+            // Check if update needed (using hash comparison like Android)
+            if !currentDatabaseHash.isEmpty && manifest.hash == currentDatabaseHash {
+                syncMessage = "Database is up to date (\(manifest.cardCount) cards)"
                 isSyncing = false
                 lastSyncDate = Date()
                 saveLastSyncDate()
@@ -99,12 +120,15 @@ class SyncViewModel: ObservableObject {
             syncProgress = 0.9
             try await replaceCardsTable(from: tempURL)
 
-            // 5. Update version
+            // 5. Update version and hash
             syncProgress = 1.0
             currentDatabaseVersion = manifest.version
+            currentDatabaseHash = manifest.hash
             lastSyncDate = Date()
             saveLastSyncDate()
             saveDatabaseVersion()
+            saveDatabaseHash()
+            await loadCardCount()  // Reload card count after sync
             syncMessage = "Database updated to v\(manifest.version)! ✅"
 
             // Clean up temp file
@@ -198,38 +222,15 @@ class SyncViewModel: ObservableObject {
         do {
             // Begin transaction for atomic operation
             try userDb.transaction {
-                print("🔄 Starting database merge transaction...")
-
                 // Step 1: Clear existing card data (preserves user data)
-                // Use DELETE OR IGNORE to handle cases where tables might be empty
-                print("🗑️ Clearing existing card data...")
-                do {
-                    try userDb.execute("DELETE FROM card_related_finishes")
-                    print("✅ Cleared card_related_finishes")
-                } catch {
-                    print("⚠️ Warning clearing card_related_finishes: \(error)")
-                }
-
-                do {
-                    try userDb.execute("DELETE FROM card_related_cards")
-                    print("✅ Cleared card_related_cards")
-                } catch {
-                    print("⚠️ Warning clearing card_related_cards: \(error)")
-                }
-
-                do {
-                    try userDb.execute("DELETE FROM cards")
-                    print("✅ Cleared cards")
-                } catch {
-                    print("⚠️ Warning clearing cards: \(error)")
-                }
+                try? userDb.execute("DELETE FROM card_related_finishes")
+                try? userDb.execute("DELETE FROM card_related_cards")
+                try? userDb.execute("DELETE FROM cards")
 
                 // Step 2: ATTACH the temp database and copy data
-                print("📎 Attaching temporary database...")
                 try userDb.execute("ATTACH DATABASE '\(tempURL.path)' AS temp_db")
 
                 // Copy all cards in one statement
-                print("📥 Copying cards from temp database...")
                 try userDb.execute("""
                     INSERT INTO cards
                     SELECT * FROM temp_db.cards
@@ -238,47 +239,28 @@ class SyncViewModel: ObservableObject {
                 // Get count of cards inserted
                 let count = try userDb.scalar("SELECT COUNT(*) FROM cards") as! Int64
                 cardsUpdated = Int(count)
-                print("✅ Inserted \(cardsUpdated) cards")
 
                 // Copy related finishes
-                print("📥 Copying related finishes...")
                 try userDb.execute("""
                     INSERT INTO card_related_finishes
                     SELECT * FROM temp_db.card_related_finishes
                 """)
-                let finishCount = try userDb.scalar("SELECT COUNT(*) FROM card_related_finishes") as! Int64
-                print("✅ Inserted \(finishCount) related finishes")
 
                 // Copy related cards
-                print("📥 Copying related cards...")
                 try userDb.execute("""
                     INSERT INTO card_related_cards
                     SELECT * FROM temp_db.card_related_cards
                 """)
-                let relatedCount = try userDb.scalar("SELECT COUNT(*) FROM card_related_cards") as! Int64
-                print("✅ Inserted \(relatedCount) related cards")
 
                 syncMessage = "Merged \(cardsUpdated) cards successfully"
-                print("✅ Data copy complete!")
             }
 
             // Detach AFTER transaction completes (outside transaction block)
             // This prevents "database is locked" errors
-            print("📌 Detaching temporary database...")
             try userDb.execute("DETACH DATABASE temp_db")
-            print("✅ Database detached successfully")
-
-            // Transaction succeeded
-            print("✅ Database merge complete: \(cardsUpdated) cards updated")
 
         } catch let error as NSError {
             // Transaction failed - rollback automatic
-            print("❌ Database merge failed: \(error)")
-            print("❌ Error domain: \(error.domain), code: \(error.code)")
-            print("❌ Error description: \(error.localizedDescription)")
-            if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
-                print("❌ Underlying error: \(underlying)")
-            }
             syncMessage = "Merge failed: \(error.localizedDescription)"
             throw error
         }
@@ -307,5 +289,42 @@ class SyncViewModel: ObservableObject {
     /// Save database version to UserDefaults
     private func saveDatabaseVersion() {
         UserDefaults.standard.set(currentDatabaseVersion, forKey: "currentDatabaseVersion")
+    }
+
+    /// Load database hash from UserDefaults
+    private func loadDatabaseHash() {
+        currentDatabaseHash = UserDefaults.standard.string(forKey: "currentDatabaseHash") ?? ""
+    }
+
+    /// Save database hash to UserDefaults
+    private func saveDatabaseHash() {
+        UserDefaults.standard.set(currentDatabaseHash, forKey: "currentDatabaseHash")
+    }
+
+    /// Load total card count from database
+    private func loadCardCount() async {
+        do {
+            let cards = try await databaseService.searchCards(
+                query: nil,
+                searchScopes: [.name, .tags, .rules],
+                cardType: nil,
+                atkType: nil,
+                playOrder: nil,
+                division: nil,
+                releaseSet: nil,
+                isBanned: nil,
+                deckCardNumbers: [],
+                minPower: 5,
+                minTechnique: 5,
+                minAgility: 5,
+                minStrike: 5,
+                minSubmission: 5,
+                minGrapple: 5,
+                limit: 10000
+            )
+            totalCards = cards.count
+        } catch {
+            totalCards = 0
+        }
     }
 }

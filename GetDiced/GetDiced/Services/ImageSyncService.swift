@@ -130,10 +130,21 @@ class ImageSyncService {
         let localHashes = getLocalHashes()
         print("💾 Local hashes: \(localHashes.count) images")
 
-        // Find images that need syncing (missing or different hash)
+        // Find images that need syncing (missing, different hash, or file doesn't exist)
         let toSync = serverManifest.images.filter { uuid, serverInfo in
             let localHash = localHashes[uuid]
-            return localHash == nil || localHash != serverInfo.hash
+
+            // If hash doesn't match or missing from manifest, needs sync
+            if localHash == nil || localHash != serverInfo.hash {
+                return true
+            }
+
+            // Even if hash matches, check if file actually exists on disk
+            let first2 = String(uuid.prefix(2))
+            let fileURL = getSyncedImagesDir()
+                .appendingPathComponent(first2)
+                .appendingPathComponent("\(uuid).webp")
+            return !fileManager.fileExists(atPath: fileURL.path)
         }
 
         print("📥 Images to sync: \(toSync.count)")
@@ -225,7 +236,18 @@ class ImageSyncService {
 
         let needSync = serverManifest.images.filter { uuid, serverInfo in
             let localHash = localHashes[uuid]
-            return localHash == nil || localHash != serverInfo.hash
+
+            // If hash doesn't match or missing from manifest, needs sync
+            if localHash == nil || localHash != serverInfo.hash {
+                return true
+            }
+
+            // Even if hash matches, check if file actually exists on disk
+            let first2 = String(uuid.prefix(2))
+            let fileURL = getSyncedImagesDir()
+                .appendingPathComponent(first2)
+                .appendingPathComponent("\(uuid).webp")
+            return !fileManager.fileExists(atPath: fileURL.path)
         }.count
 
         return (needSync, serverManifest.imageCount)

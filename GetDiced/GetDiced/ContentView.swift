@@ -526,6 +526,12 @@ struct AddCardToFolderSheet: View {
     @State private var searchResults: [Card] = []
     @State private var isSearching = false
     @State private var cardToView: Card?
+    @State private var showFilters = false
+
+    // Filter state
+    @State private var selectedCardType: String?
+    @State private var selectedDivision: String?
+    @State private var selectedDeckCardNumbers: Set<Int> = []
 
     var body: some View {
         NavigationStack {
@@ -539,6 +545,26 @@ struct AddCardToFolderSheet: View {
                             dismiss()
                         }
                     }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(action: {
+                            showFilters = true
+                        }) {
+                            Label("Filters", systemImage: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        }
+                    }
+                }
+                .sheet(isPresented: $showFilters) {
+                    AddCardFiltersSheet(
+                        selectedCardType: $selectedCardType,
+                        selectedDivision: $selectedDivision,
+                        selectedDeckCardNumbers: $selectedDeckCardNumbers,
+                        onApply: {
+                            showFilters = false
+                            Task {
+                                await performSearch(query: searchQuery)
+                            }
+                        }
+                    )
                 }
                 .toolbar(.visible, for: .navigationBar)
             .sheet(item: $cardToView) { card in
@@ -551,7 +577,7 @@ struct AddCardToFolderSheet: View {
                             Task {
                                 await viewModel.addCard(card, toFolder: folder.id, quantity: quantity)
                                 cardToView = nil
-                                dismiss()
+                                // Don't dismiss the sheet - keep filters active for adding more cards
                             }
                         },
                         databaseService: viewModel.databaseService
@@ -602,35 +628,163 @@ struct AddCardToFolderSheet: View {
         }
     }
 
+    var hasActiveFilters: Bool {
+        selectedCardType != nil || selectedDivision != nil || !selectedDeckCardNumbers.isEmpty
+    }
+
     func performSearch(query: String) async {
         isSearching = true
 
         do {
             let dbService = viewModel.databaseService
-            if query.isEmpty {
-                // Show first 50 cards
-                searchResults = try await dbService.searchCards(
-                    query: nil,
-                    searchScope: "all",
-                    cardType: nil,
-                    atkType: nil,
-                    playOrder: nil,
-                    division: nil,
-                    releaseSet: nil,
-                    isBanned: nil,
-                    deckCardNumber: nil,
-                    limit: 50
-                )
-            } else {
-                // Search by name
-                searchResults = try await dbService.searchCards(query: query, limit: 50)
-            }
+            searchResults = try await dbService.searchCards(
+                query: query.isEmpty ? nil : query,
+                searchScopes: query.isEmpty ? [.name, .tags, .rules] : [.name],
+                cardType: selectedCardType,
+                atkType: nil,
+                playOrder: nil,
+                division: selectedDivision,
+                releaseSet: nil,
+                isBanned: nil,
+                deckCardNumbers: selectedDeckCardNumbers,
+                minPower: 5,
+                minTechnique: 5,
+                minAgility: 5,
+                minStrike: 5,
+                minSubmission: 5,
+                minGrapple: 5,
+                limit: 100
+            )
         } catch {
             print("Search error: \(error)")
             searchResults = []
         }
 
         isSearching = false
+    }
+}
+
+// MARK: - Add Card Filters Sheet
+
+struct AddCardFiltersSheet: View {
+    @Binding var selectedCardType: String?
+    @Binding var selectedDivision: String?
+    @Binding var selectedDeckCardNumbers: Set<Int>
+    let onApply: () -> Void
+    @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var viewModel: CollectionViewModel
+
+    @State private var availableCardTypes: [String] = []
+    @State private var availableDivisions: [String] = []
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                // Card Type Section
+                Section("Card Type") {
+                    Picker("Type", selection: $selectedCardType) {
+                        Text("All Types").tag(nil as String?)
+                        ForEach(availableCardTypes, id: \.self) { type in
+                            Text(type).tag(type as String?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: selectedCardType) { newValue in
+                        // Clear deck card numbers if switching away from MainDeckCard
+                        if newValue != nil && newValue != "MainDeckCard" {
+                            selectedDeckCardNumbers = []
+                        }
+
+                        // Clear division if switching away from SingleCompetitorCard
+                        if newValue != nil && newValue != "SingleCompetitorCard" {
+                            selectedDivision = nil
+                        }
+                    }
+                }
+
+                // Division Section (only for SingleCompetitorCard)
+                if selectedCardType == nil || selectedCardType == "SingleCompetitorCard" {
+                    Section("Division") {
+                        Picker("Division", selection: $selectedDivision) {
+                            Text("All Divisions").tag(nil as String?)
+                            ForEach(availableDivisions, id: \.self) { division in
+                                Text(division).tag(division as String?)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+
+                // Deck Card Numbers Section (only for MainDeckCard)
+                if selectedCardType == nil || selectedCardType == "MainDeckCard" {
+                    Section {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
+                            ForEach(1...30, id: \.self) { number in
+                                Button(action: {
+                                    if selectedDeckCardNumbers.contains(number) {
+                                        selectedDeckCardNumbers.remove(number)
+                                    } else {
+                                        selectedDeckCardNumbers.insert(number)
+                                    }
+                                }) {
+                                    Text("\(number)")
+                                        .font(.caption)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(selectedDeckCardNumbers.contains(number) ? Color.blue : Color.gray.opacity(0.2))
+                                        .foregroundColor(selectedDeckCardNumbers.contains(number) ? .white : .primary)
+                                        .cornerRadius(8)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 4)
+
+                        if !selectedDeckCardNumbers.isEmpty {
+                            Button("Clear Deck Card Numbers") {
+                                selectedDeckCardNumbers = []
+                            }
+                            .foregroundColor(.red)
+                        }
+                    } header: {
+                        Text("Deck Card Numbers")
+                    }
+                }
+
+                // Clear All Section
+                Section {
+                    Button("Clear All Filters", role: .destructive) {
+                        selectedCardType = nil
+                        selectedDivision = nil
+                        selectedDeckCardNumbers = []
+                    }
+                }
+            }
+            .navigationTitle("Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        onApply()
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                // Load filter options
+                do {
+                    availableCardTypes = try await viewModel.databaseService.getAllCardTypes()
+                    availableDivisions = try await viewModel.databaseService.getAllDivisions()
+                } catch {
+                    print("Error loading filter options: \(error)")
+                }
+            }
+        }
     }
 }
 
@@ -1173,6 +1327,7 @@ struct CardRow: View {
 
 struct CardSearchView: View {
     @EnvironmentObject var viewModel: CardSearchViewModel
+    @State private var showFilterSheet = false
 
     var body: some View {
         ScrollView {
@@ -1233,10 +1388,27 @@ struct CardSearchView: View {
                                 CardGridItem(card: card)
                             }
                             .buttonStyle(PlainButtonStyle())
+                            .onAppear {
+                                // Trigger infinite scroll when reaching near end
+                                if card.id == viewModel.cards.last?.id {
+                                    Task {
+                                        await viewModel.loadNextPage()
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal)
-                    .padding(.bottom)
+
+                    // Loading indicator at bottom
+                    if viewModel.isLoadingMore {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .padding()
+                            Spacer()
+                        }
+                    }
                 }
             }
         }
@@ -1247,12 +1419,15 @@ struct CardSearchView: View {
         .searchable(text: $viewModel.searchQuery, prompt: "Search cards...")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    FiltersMenu(viewModel: viewModel)
-                } label: {
+                Button(action: {
+                    showFilterSheet = true
+                }) {
                     Label("Filters", systemImage: viewModel.hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                 }
             }
+        }
+        .sheet(isPresented: $showFilterSheet) {
+            FilterSheet(viewModel: viewModel)
         }
         .task {
             // Load filter options and initial cards
@@ -1312,16 +1487,21 @@ struct CardGridItem: View {
             // Card Name
             Text(card.name)
                 .font(.caption)
-                .fontWeight(.medium)
+                .fontWeight(.semibold)
                 .lineLimit(2)
-                .foregroundColor(.primary)
+                .multilineTextAlignment(.leading)
 
-            // Card Type
-            Text(card.cardType)
+            // Card Type Badge
+            Text(card.cardType.replacingOccurrences(of: "Card", with: ""))
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.blue.opacity(0.2))
+                .foregroundColor(.blue)
+                .cornerRadius(4)
         }
-        .frame(maxWidth: .infinity)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .cornerRadius(12)
     }
 }
 
@@ -1346,10 +1526,18 @@ struct ActiveFiltersBar: View {
                         .cornerRadius(16)
                 }
 
-                // Active filter chips
-                if viewModel.searchScope != .all {
-                    FilterChip(label: viewModel.searchScope.displayName) {
-                        viewModel.searchScope = .all
+                // Active filter chips - search scopes
+                if viewModel.searchScopes != [.name, .tags, .rules] {
+                    ForEach(Array(viewModel.searchScopes).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { scope in
+                        FilterChip(label: "Search: \(scope.displayName)") {
+                            var newScopes = viewModel.searchScopes
+                            newScopes.remove(scope)
+                            if newScopes.isEmpty {
+                                viewModel.searchScopes = [.name, .tags, .rules]
+                            } else {
+                                viewModel.searchScopes = newScopes
+                            }
+                        }
                     }
                 }
 
@@ -1365,33 +1553,10 @@ struct ActiveFiltersBar: View {
                     }
                 }
 
-                if let atkType = viewModel.selectedAtkType {
-                    FilterChip(label: atkType) {
-                        viewModel.selectedAtkType = nil
-                    }
-                }
-
-                if let playOrder = viewModel.selectedPlayOrder {
-                    FilterChip(label: playOrder) {
-                        viewModel.selectedPlayOrder = nil
-                    }
-                }
-
-                if let deckCardNumber = viewModel.selectedDeckCardNumber {
-                    FilterChip(label: "Deck #\(deckCardNumber)") {
-                        viewModel.selectedDeckCardNumber = nil
-                    }
-                }
-
-                if let releaseSet = viewModel.selectedReleaseSet {
-                    FilterChip(label: releaseSet) {
-                        viewModel.selectedReleaseSet = nil
-                    }
-                }
-
-                if viewModel.showBannedOnly {
-                    FilterChip(label: "Banned") {
-                        viewModel.showBannedOnly = false
+                // Deck card numbers (multi-select)
+                ForEach(Array(viewModel.selectedDeckCardNumbers).sorted(), id: \.self) { deckNumber in
+                    FilterChip(label: "Deck #\(deckNumber)") {
+                        viewModel.selectedDeckCardNumbers.remove(deckNumber)
                     }
                 }
             }
@@ -1427,11 +1592,31 @@ struct FiltersMenu: View {
     @ObservedObject var viewModel: CardSearchViewModel
 
     var body: some View {
-        // Search Scope
+        // Search Scope (multi-select)
         Menu("Search In") {
+            Button("All Fields") {
+                viewModel.searchScopes = [.name, .tags, .rules]
+            }
+            Divider()
             ForEach(SearchScope.allCases, id: \.self) { scope in
-                Button(scope.displayName) {
-                    viewModel.searchScope = scope
+                Button(action: {
+                    if viewModel.searchScopes.contains(scope) {
+                        var newScopes = viewModel.searchScopes
+                        newScopes.remove(scope)
+                        if !newScopes.isEmpty {
+                            viewModel.searchScopes = newScopes
+                        }
+                    } else {
+                        viewModel.searchScopes.insert(scope)
+                    }
+                }) {
+                    HStack {
+                        Text(scope.displayName)
+                        if viewModel.searchScopes.contains(scope) {
+                            Spacer()
+                            Image(systemName: "checkmark")
+                        }
+                    }
                 }
             }
         }
@@ -1462,60 +1647,29 @@ struct FiltersMenu: View {
             }
         }
 
-        // Attack Type
-        Menu("Attack Type") {
-            Button("All") {
-                viewModel.selectedAtkType = nil
-            }
-            Button("Strike") {
-                viewModel.selectedAtkType = "Strike"
-            }
-            Button("Grapple") {
-                viewModel.selectedAtkType = "Grapple"
-            }
-            Button("Submission") {
-                viewModel.selectedAtkType = "Submission"
-            }
-        }
-
-        // Play Order
-        Menu("Play Order") {
-            Button("All") {
-                viewModel.selectedPlayOrder = nil
-            }
-            Button("Before") {
-                viewModel.selectedPlayOrder = "Before"
-            }
-            Button("During") {
-                viewModel.selectedPlayOrder = "During"
-            }
-            Button("After") {
-                viewModel.selectedPlayOrder = "After"
-            }
-        }
-
-        // Deck Card Number (1-30)
+        // Deck Card Number (1-30, multi-select)
         Menu("Deck Card #") {
-            Button("All") {
-                viewModel.selectedDeckCardNumber = nil
+            Button("Clear All") {
+                viewModel.selectedDeckCardNumbers = []
             }
+            Divider()
             ForEach(1...30, id: \.self) { number in
-                Button("\(number)") {
-                    viewModel.selectedDeckCardNumber = number
+                Button(action: {
+                    if viewModel.selectedDeckCardNumbers.contains(number) {
+                        viewModel.selectedDeckCardNumbers.remove(number)
+                    } else {
+                        viewModel.selectedDeckCardNumbers.insert(number)
+                    }
+                }) {
+                    HStack {
+                        Text("\(number)")
+                        if viewModel.selectedDeckCardNumbers.contains(number) {
+                            Spacer()
+                            Image(systemName: "checkmark")
+                        }
+                    }
                 }
             }
-        }
-
-        Divider()
-
-        // Banned Toggle
-        Button(action: {
-            viewModel.showBannedOnly.toggle()
-        }) {
-            Label(
-                viewModel.showBannedOnly ? "Show All Cards" : "Show Banned Only",
-                systemImage: viewModel.showBannedOnly ? "checkmark" : ""
-            )
         }
 
         Divider()
@@ -1523,6 +1677,179 @@ struct FiltersMenu: View {
         // Clear All
         Button("Clear All Filters", role: .destructive) {
             viewModel.clearFilters()
+        }
+    }
+}
+
+// MARK: - Full Filter Sheet
+
+struct FilterSheet: View {
+    @ObservedObject var viewModel: CardSearchViewModel
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                // Search Scopes Section
+                Section("Search In") {
+                    ForEach(SearchScope.allCases, id: \.self) { scope in
+                        Toggle(scope.displayName, isOn: Binding(
+                            get: { viewModel.searchScopes.contains(scope) },
+                            set: { isOn in
+                                if isOn {
+                                    viewModel.searchScopes.insert(scope)
+                                } else if viewModel.searchScopes.count > 1 {
+                                    viewModel.searchScopes.remove(scope)
+                                }
+                            }
+                        ))
+                    }
+                }
+
+                // Card Type Section
+                Section("Card Type") {
+                    Picker("Type", selection: $viewModel.selectedCardType) {
+                        Text("All Types").tag(nil as String?)
+                        ForEach(viewModel.availableCardTypes, id: \.self) { type in
+                            Text(type).tag(type as String?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: viewModel.selectedCardType) { newValue in
+                        // Clear deck card numbers if switching away from MainDeckCard
+                        if newValue != nil && newValue != "MainDeckCard" {
+                            viewModel.selectedDeckCardNumbers = []
+                        }
+
+                        // Clear division if switching away from SingleCompetitorCard
+                        if newValue != nil && newValue != "SingleCompetitorCard" {
+                            viewModel.selectedDivision = nil
+                        }
+
+                        // Clear stat filters if switching away from competitor cards
+                        let competitorTypes = ["SingleCompetitorCard", "TrioCompetitorCard", "TornadoCompetitorCard"]
+                        if newValue != nil && !competitorTypes.contains(newValue!) {
+                            viewModel.minPower = 5
+                            viewModel.minTechnique = 5
+                            viewModel.minAgility = 5
+                            viewModel.minStrike = 5
+                            viewModel.minSubmission = 5
+                            viewModel.minGrapple = 5
+                        }
+                    }
+                }
+
+                // Deck Card Numbers Section (only for MainDeckCard)
+                if viewModel.selectedCardType == nil || viewModel.selectedCardType == "MainDeckCard" {
+                    Section {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
+                            ForEach(1...30, id: \.self) { number in
+                                Button(action: {
+                                    if viewModel.selectedDeckCardNumbers.contains(number) {
+                                        viewModel.selectedDeckCardNumbers.remove(number)
+                                    } else {
+                                        viewModel.selectedDeckCardNumbers.insert(number)
+                                    }
+                                }) {
+                                    Text("\(number)")
+                                        .font(.caption)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(viewModel.selectedDeckCardNumbers.contains(number) ? Color.blue : Color.gray.opacity(0.2))
+                                        .foregroundColor(viewModel.selectedDeckCardNumbers.contains(number) ? .white : .primary)
+                                        .cornerRadius(8)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 4)
+
+                        if !viewModel.selectedDeckCardNumbers.isEmpty {
+                            Button("Clear Deck Card Numbers") {
+                                viewModel.selectedDeckCardNumbers = []
+                            }
+                            .foregroundColor(.red)
+                        }
+                    } header: {
+                        Text("Deck Card Numbers")
+                    }
+                }
+
+                // Stat Filters Section (only for competitor cards)
+                if viewModel.selectedCardType == nil ||
+                   viewModel.selectedCardType == "SingleCompetitorCard" ||
+                   viewModel.selectedCardType == "TrioCompetitorCard" ||
+                   viewModel.selectedCardType == "TornadoCompetitorCard" {
+                    Section("Competitor Stats (Minimum)") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            StatSlider(label: "Power", value: $viewModel.minPower, color: .red)
+                            StatSlider(label: "Technique", value: $viewModel.minTechnique, color: .orange)
+                            StatSlider(label: "Agility", value: $viewModel.minAgility, color: .green)
+                            StatSlider(label: "Strike", value: $viewModel.minStrike, color: .yellow)
+                            StatSlider(label: "Submission", value: $viewModel.minSubmission, color: .purple)
+                            StatSlider(label: "Grapple", value: $viewModel.minGrapple, color: .blue)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                // Division Section (only for SingleCompetitorCard)
+                if viewModel.selectedCardType == nil || viewModel.selectedCardType == "SingleCompetitorCard" {
+                    Section("Division") {
+                        Picker("Division", selection: $viewModel.selectedDivision) {
+                            Text("All Divisions").tag(nil as String?)
+                            ForEach(viewModel.availableDivisions, id: \.self) { division in
+                                Text(division).tag(division as String?)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+
+                // Clear All Section
+                Section {
+                    Button("Clear All Filters", role: .destructive) {
+                        viewModel.clearFilters()
+                    }
+                }
+            }
+            .navigationTitle("Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Stat Slider Component
+
+struct StatSlider: View {
+    let label: String
+    @Binding var value: Int
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                Text("\(value)")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(value > 5 ? color : .secondary)
+            }
+            Slider(value: Binding(
+                get: { Double(value) },
+                set: { value = Int($0) }
+            ), in: 5...30, step: 1)
+            .tint(color)
         }
     }
 }
@@ -1802,24 +2129,33 @@ struct SpecialCardSlot: View {
 
     var body: some View {
         if let card = card {
-            CardRow(card: card)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    onTapCard(card)
+            HStack {
+                CardRow(card: card)
+                Spacer()
+                Button(action: onAddCard) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundColor(.blue)
+                        .imageScale(.large)
                 }
-                .contextMenu {
-                    Button {
-                        onAddCard()
-                    } label: {
-                        Label("Replace Card", systemImage: "arrow.triangle.2.circlepath")
-                    }
+                .buttonStyle(.plain)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onTapCard(card)  // View details (matching Android)
+            }
+            .contextMenu {
+                Button {
+                    onAddCard()
+                } label: {
+                    Label("Replace Card", systemImage: "arrow.triangle.2.circlepath")
+                }
 
-                    Button(role: .destructive) {
-                        onRemoveCard()
-                    } label: {
-                        Label("Remove", systemImage: "trash")
-                    }
+                Button(role: .destructive) {
+                    onRemoveCard()
+                } label: {
+                    Label("Remove", systemImage: "trash")
                 }
+            }
         } else {
             Button(action: onAddCard) {
                 HStack {
@@ -1873,7 +2209,7 @@ struct DeckSlotRow: View {
     let onRemoveCard: () -> Void
 
     var isFinishSlot: Bool {
-        slotNumber >= 27
+        false  // Finish slots are separate, not part of 1-30 deck slots
     }
 
     var body: some View {
@@ -1884,10 +2220,17 @@ struct DeckSlotRow: View {
                     .fontWeight(isFinishSlot ? .semibold : .regular)
                     .frame(width: 35, alignment: .leading)
                 CardRow(card: cardDetails.card)
+                Spacer()
+                Button(action: onAddCard) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundColor(.blue)
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                onTapCard(cardDetails.card)
+                onTapCard(cardDetails.card)  // View details (matching Android)
             }
             .contextMenu {
                 Button {
@@ -1929,15 +2272,19 @@ struct DeckSlotRow: View {
 struct DeckEditorView: View {
     let deck: Deck
     @EnvironmentObject var viewModel: DeckViewModel
-    @State private var showingCardPicker = false
-    @State private var selectedSlotType: DeckSlotType = .deck
-    @State private var selectedSlotNumber: Int = 1
+    @State private var cardPickerSlot: DeckSlotInfo?
     @State private var showingQRCode = false
     @State private var showingCSVExport = false
     @State private var csvDataToExport: String?
     @State private var cardToView: Card?
     @State private var showingRenameDeck = false
     @State private var deckName: String = ""
+
+    struct DeckSlotInfo: Identifiable {
+        let id = UUID()
+        let slotType: DeckSlotType
+        let slotNumber: Int
+    }
 
     // Computed property for spectacle type binding
     private var spectacleTypeBinding: Binding<SpectacleType> {
@@ -2056,9 +2403,7 @@ struct DeckEditorView: View {
                         cardToView = card
                     },
                     onAddCard: {
-                        selectedSlotType = .entrance
-                        selectedSlotNumber = 0
-                        showingCardPicker = true
+                        cardPickerSlot = DeckSlotInfo(slotType: .entrance, slotNumber: 0)
                     },
                     onRemoveCard: {
                         Task {
@@ -2079,9 +2424,7 @@ struct DeckEditorView: View {
                         cardToView = card
                     },
                     onAddCard: {
-                        selectedSlotType = .competitor
-                        selectedSlotNumber = 0
-                        showingCardPicker = true
+                        cardPickerSlot = DeckSlotInfo(slotType: .competitor, slotNumber: 0)
                     },
                     onRemoveCard: {
                         Task {
@@ -2103,9 +2446,7 @@ struct DeckEditorView: View {
                             cardToView = card
                         },
                         onAddCard: {
-                            selectedSlotType = .deck
-                            selectedSlotNumber = slotNum
-                            showingCardPicker = true
+                            cardPickerSlot = DeckSlotInfo(slotType: .deck, slotNumber: slotNum)
                         },
                         onRemoveCard: {
                             Task {
@@ -2133,8 +2474,7 @@ struct DeckEditorView: View {
                     )
                 }
                 Button(action: {
-                    selectedSlotType = .alternate
-                    showingCardPicker = true
+                    cardPickerSlot = DeckSlotInfo(slotType: .alternate, slotNumber: 0)
                 }) {
                     HStack {
                         Image(systemName: "plus.circle")
@@ -2163,12 +2503,12 @@ struct DeckEditorView: View {
                     deckName = newName
                 }
             }
-            .sheet(isPresented: $showingCardPicker) {
+            .sheet(item: $cardPickerSlot) { slotInfo in
                 AddCardToDeckSheet(
                     deckId: deck.id,
                     folderId: deck.folderId,
-                    slotType: selectedSlotType,
-                    slotNumber: selectedSlotNumber
+                    slotType: slotInfo.slotType,
+                    slotNumber: slotInfo.slotNumber
                 )
             }
             .sheet(isPresented: $showingQRCode) {
@@ -2324,14 +2664,14 @@ struct AddCardToDeckSheet: View {
                 // Only EntranceCard type
                 availableCards = try await dbService.searchCards(
                     query: nil,
-                    searchScope: "all",
+                    searchScopes: [.name, .tags, .rules],
                     cardType: "EntranceCard",
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
-                    deckCardNumber: nil,
+                    deckCardNumbers: [],
                     limit: 1000
                 )
 
@@ -2347,23 +2687,23 @@ struct AddCardToDeckSheet: View {
                     cardType = "TrioCompetitorCard"
                 default:
                     // Tag or custom folders - load all competitor types
-                    let singles = try await dbService.searchCards(query: nil, searchScope: "all", cardType: "SingleCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumber: nil, limit: 1000)
-                    let tornado = try await dbService.searchCards(query: nil, searchScope: "all", cardType: "TornadoCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumber: nil, limit: 1000)
-                    let trios = try await dbService.searchCards(query: nil, searchScope: "all", cardType: "TrioCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumber: nil, limit: 1000)
+                    let singles = try await dbService.searchCards(query: nil, searchScopes: [.name, .tags, .rules], cardType: "SingleCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumbers: [], limit: 1000)
+                    let tornado = try await dbService.searchCards(query: nil, searchScopes: [.name, .tags, .rules], cardType: "TornadoCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumbers: [], limit: 1000)
+                    let trios = try await dbService.searchCards(query: nil, searchScopes: [.name, .tags, .rules], cardType: "TrioCompetitorCard", atkType: nil, playOrder: nil, division: nil, releaseSet: nil, isBanned: nil, deckCardNumbers: [], limit: 1000)
                     availableCards = (singles + tornado + trios).sorted { $0.name < $1.name }
                     isSearching = false
                     return
                 }
                 availableCards = try await dbService.searchCards(
                     query: nil,
-                    searchScope: "all",
+                    searchScopes: [.name, .tags, .rules],
                     cardType: cardType,
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
-                    deckCardNumber: nil,
+                    deckCardNumbers: [],
                     limit: 1000
                 )
 
@@ -2371,14 +2711,14 @@ struct AddCardToDeckSheet: View {
                 // Only MainDeckCard type with matching deck_card_number
                 let allMainDeck = try await dbService.searchCards(
                     query: nil,
-                    searchScope: "all",
+                    searchScopes: [.name, .tags, .rules],
                     cardType: "MainDeckCard",
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
-                    deckCardNumber: nil,
+                    deckCardNumbers: [],
                     limit: 1000
                 )
                 availableCards = allMainDeck.filter { $0.deckCardNumber == slotNumber }
@@ -2387,14 +2727,14 @@ struct AddCardToDeckSheet: View {
                 // Only MainDeckCard type with play_order = "Finish"
                 availableCards = try await dbService.searchCards(
                     query: nil,
-                    searchScope: "all",
+                    searchScopes: [.name, .tags, .rules],
                     cardType: "MainDeckCard",
                     atkType: nil,
                     playOrder: "Finish",
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
-                    deckCardNumber: nil,
+                    deckCardNumbers: [],
                     limit: 1000
                 )
 
@@ -2402,14 +2742,14 @@ struct AddCardToDeckSheet: View {
                 // Any card type
                 availableCards = try await dbService.searchCards(
                     query: nil,
-                    searchScope: "all",
+                    searchScopes: [.name, .tags, .rules],
                     cardType: nil,
                     atkType: nil,
                     playOrder: nil,
                     division: nil,
                     releaseSet: nil,
                     isBanned: nil,
-                    deckCardNumber: nil,
+                    deckCardNumbers: [],
                     limit: 1000
                 )
             }
@@ -2449,6 +2789,7 @@ struct SettingsView: View {
 
             // Database Section
             Section("Database") {
+                LabeledContent("Card Count", value: "\(syncViewModel.totalCards)")
                 LabeledContent("Current Version", value: "v\(syncViewModel.currentDatabaseVersion)")
 
                 if let latest = syncViewModel.latestDatabaseVersion {
@@ -2536,6 +2877,19 @@ struct SettingsView: View {
                             .foregroundStyle(.green)
                         Text(syncViewModel.syncMessage)
                             .font(.callout)
+                    }
+                }
+            }
+
+            // Error Messages
+            if let errorMessage = syncViewModel.errorMessage {
+                Section {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(errorMessage)
+                            .font(.callout)
+                            .foregroundStyle(.red)
                     }
                 }
             }
