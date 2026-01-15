@@ -125,5 +125,4 @@ GetDiced/Resources/images/
 **/images/mobile/
 *.webp
 
-# Temporary view files (consolidated into ContentView.swift)
-GetDiced/GetDiced/Views/
+# Temporary view files (consolidated into ContentView.swift) - REMOVED: Views are now properly separated
